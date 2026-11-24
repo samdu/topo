@@ -14,17 +14,22 @@ import XCTest
 /// when the mute says so at the send, not when the chat's screen first answered.
 @MainActor
 final class MuteTests: XCTestCase {
-    private var kept: Any?
+    private var kept: [String: Any?] = [:]
+    /// What the hosted chat writes in the standard defaults: the mute, and the first run, which a
+    /// send over an empty log may mark answered.
+    private let keys = [Mute.key, "firstRunAnswered"]
 
     override func setUp() {
         super.setUp()
         // The chat's `@AppStorage` is the standard defaults', and so is `Mute.readsAloud()`, so the
         // test writes there and puts back what it found.
-        kept = UserDefaults.standard.object(forKey: Mute.key)
+        for key in keys { kept[key] = UserDefaults.standard.object(forKey: key) }
     }
 
     override func tearDown() {
-        if let kept { UserDefaults.standard.set(kept, forKey: Mute.key) } else { UserDefaults.standard.removeObject(forKey: Mute.key) }
+        for key in keys {
+            if let value = kept[key] ?? nil { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
         super.tearDown()
     }
 
@@ -37,10 +42,10 @@ final class MuteTests: XCTestCase {
         XCTAssertTrue(condition(), "waited half a minute for \(what)", file: file, line: line)
     }
 
-    /// Muted when the chat appeared and unmuted after: the open microphone's next turn is a spoken
-    /// one, its reply waited for and read, with no relaunch between.
+    /// Muted when the chat appeared and unmuted after: the open microphone's next turn is marked
+    /// spoken, its reply waited for, with no relaunch between.
     func testAnUnmuteReachesTheOpenMicrophonesNextTurn() async throws {
-        try await unmute(rerendered: false)
+        try await change(to: true, rerendered: false)
     }
 
     /// The same with the chat drawn again by what holds it between its appearing and the unmute,
@@ -48,11 +53,20 @@ final class MuteTests: XCTestCase {
     /// the chat's task installed, whose copy of the view is then older than the one drawn and does
     /// not see the mute change (#793).
     func testAnUnmuteReachesTheOpenMicrophonesNextTurnOverADrawnAgainChat() async throws {
-        try await unmute(rerendered: true)
+        try await change(to: true, rerendered: true)
     }
 
-    private func unmute(rerendered: Bool) async throws {
-        UserDefaults.standard.set(false, forKey: Mute.key)
+    /// The other way: read aloud when the chat appeared and muted after it was drawn again, the
+    /// open microphone's next turn is not a spoken one, so nothing waits for a reply nobody hears.
+    func testAMuteReachesTheOpenMicrophonesNextTurnOverADrawnAgainChat() async throws {
+        try await change(to: false, rerendered: true)
+    }
+
+    /// Mounts the chat with replies read aloud or muted (the other of `readsAloud`), draws it
+    /// again from its holder if `rerendered`, sets the mute to `readsAloud` and sends through the
+    /// open microphone's send.
+    private func change(to readsAloud: Bool, rerendered: Bool) async throws {
+        UserDefaults.standard.set(!readsAloud, forKey: Mute.key)
 
         let name = "topo.tests.mute.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
@@ -96,13 +110,14 @@ final class MuteTests: XCTestCase {
 
         await settle("the chat to install its send") { conversation.send != nil }
         if rerendered {
+            let drawn = ticker.draws
             ticker.tick += 1
             window.layoutIfNeeded()
-            try? await Task.sleep(for: .milliseconds(100))
+            await settle("the holder to draw the chat again") { ticker.draws > drawn }
         }
         // The mute's button writes the setting through the chat's `@AppStorage`, which is the
         // standard defaults' key; the screen draws it again before the next turn is heard.
-        UserDefaults.standard.set(true, forKey: Mute.key)
+        UserDefaults.standard.set(readsAloud, forKey: Mute.key)
         window.layoutIfNeeded()
         try? await Task.sleep(for: .milliseconds(100))
         window.layoutIfNeeded()
@@ -112,9 +127,15 @@ final class MuteTests: XCTestCase {
         // failure before it is read.
         let sending = Task { await send("what time is it") }
         defer { sending.cancel() }
-        await settle("the turn to be marked spoken") { (defaults.stringArray(forKey: "topo.harness.spoken")?.count ?? 0) == 1 }
-        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken")?.count ?? 0, 1,
-                       "an unmuted turn was not marked spoken: its reply would not be read aloud")
+        // The mark, or its absence, is made before the send's attempt begins.
+        await settle("the send's attempt to begin") { harness.busy }
+        let marked = defaults.stringArray(forKey: "topo.harness.spoken")?.count ?? 0
+        if readsAloud {
+            XCTAssertEqual(marked, 1, "an unmuted turn was not marked spoken: its reply would not be read aloud")
+        } else {
+            XCTAssertEqual(marked, 0, "a muted turn was marked spoken: a reply nobody hears is waited for")
+            XCTAssertTrue(speaker.awaiting.isEmpty, "a muted turn's reply is waited for")
+        }
         speaker.endAllWaits("the test is done")
         conversation.send = nil
     }
@@ -124,13 +145,16 @@ final class MuteTests: XCTestCase {
 @MainActor @Observable
 private final class Ticker {
     var tick = 0
+    /// The holder's draws, counted where it draws, which is what says it drew the chat again.
+    @ObservationIgnored var draws = 0
 }
 
 /// The chat as the root holds it, drawn again whenever the ticker moves.
 private struct Host: View {
     let ticker: Ticker
     var body: some View {
-        NavigationStack {
+        let _ = ticker.draws += 1
+        return NavigationStack {
             ChatView().overlay(alignment: .top) { Text("\(ticker.tick)").hidden() }
         }
     }
