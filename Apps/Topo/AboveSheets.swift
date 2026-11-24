@@ -32,16 +32,14 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
     /// is wanted.
     final class Anchor: UIView {
         private(set) var above: AboveSheetsWindow?
-        private weak var scene: UIWindowScene?
-        private var inset: CGFloat = 0
+        /// The app's window it was last in, whose safe area is read each time the window above
+        /// is placed, so a rotation under the sheet places it from the safe area of then.
+        private weak var source: UIWindow?
         private var wanted: (view: AnyView, top: CGFloat, width: CGFloat)?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            if let window, let found = window.windowScene {
-                scene = found
-                inset = window.safeAreaInsets.top
-            }
+            if let window, window.windowScene != nil { source = window }
             place()
         }
 
@@ -51,14 +49,15 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
         }
 
         private func place() {
-            guard let wanted, let scene else {
+            guard let wanted, let source, let scene = source.windowScene else {
                 above?.isHidden = true
                 above = nil
                 return
             }
             let held = above ?? AboveSheetsWindow(windowScene: scene)
             above = held
-            held.hold(wanted.view, top: inset + wanted.top, width: wanted.width)
+            held.hold(wanted.view, top: { [weak source] in (source?.safeAreaInsets.top ?? 0) + wanted.top },
+                      width: wanted.width)
         }
     }
 }
@@ -68,7 +67,9 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
 /// is anchored on (`WebAuth.presentationAnchor`), stay the app's.
 final class AboveSheetsWindow: UIWindow {
     private let host = UIHostingController(rootView: AnyView(EmptyView()))
-    private var placed: (top: CGFloat, width: CGFloat) = (0, 0)
+    /// Where it stands, read again at each placing: points under the screen's top.
+    private var top: () -> CGFloat = { 0 }
+    private var width: CGFloat = 0
 
     override init(windowScene: UIWindowScene) {
         super.init(windowScene: windowScene)
@@ -80,10 +81,13 @@ final class AboveSheetsWindow: UIWindow {
         backgroundColor = .clear
         rootViewController = host
         // What the content measures follows the text size, and where it stands the screen's
-        // shape, neither of which reaches the view that holds it.
+        // shape and the app window's safe area, none of which reaches the view that holds it.
+        // A rotation changes the size classes before the app window's safe area has followed,
+        // so it is placed again once that layout has run, too.
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitVerticalSizeClass.self,
                                  UITraitHorizontalSizeClass.self]) { (window: AboveSheetsWindow, _) in
             window.reframe()
+            DispatchQueue.main.async { [weak window] in window?.reframe() }
         }
     }
 
@@ -93,9 +97,10 @@ final class AboveSheetsWindow: UIWindow {
     override var canBecomeKey: Bool { false }
 
     /// Draws `view`, `top` points under the screen's top, `width` points wide at most.
-    func hold(_ view: AnyView, top: CGFloat, width: CGFloat) {
+    func hold(_ view: AnyView, top: @escaping () -> CGFloat, width: CGFloat) {
         host.rootView = view
-        placed = (top, width)
+        self.top = top
+        self.width = width
         reframe()
         isHidden = false
     }
@@ -107,7 +112,7 @@ final class AboveSheetsWindow: UIWindow {
             self.host.view.systemLayoutSizeFitting(CGSize(width: size.width, height: UIView.layoutFittingCompressedSize.height),
                                                    withHorizontalFittingPriority: .required,
                                                    verticalFittingPriority: .fittingSizeLevel)
-        }, top: placed.top, width: placed.width, in: windowScene?.coordinateSpace.bounds ?? .zero)
+        }, top: top(), width: width, in: windowScene?.coordinateSpace.bounds ?? .zero)
     }
 
     /// The content's own size, `width` wide at most and never wider or taller than the screen,

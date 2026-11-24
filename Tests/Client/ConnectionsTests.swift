@@ -322,6 +322,26 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertEqual(GitHubCodeSign.skyRows(cut), 2)
     }
 
+    /// The sign over the page is read within its bounds and no further: at each end a value is
+    /// taken, past it the compiled one stands, and a refused field takes no other with it.
+    func testTheSignOverThePageIsReadWithinItsBounds() {
+        func read(_ scale: Double, _ top: Double) -> Look.Settings {
+            LookDocument.read(#"{"settings": {"signOverPageScale": \#(scale), "signOverPageTop": \#(top), "copiedPause": 1.5}}"#).look.settings
+        }
+        let compiled = Look().settings
+        for (scale, top) in [(0.5, 80.0), (1.7, 400.0)] {
+            let settings = read(scale, top)
+            XCTAssertEqual(settings.signOverPageScale, scale, accuracy: 0.0001)
+            XCTAssertEqual(settings.signOverPageTop, top, accuracy: 0.0001)
+        }
+        for (scale, top) in [(0.49, 79.0), (1.71, 401.0)] {
+            let settings = read(scale, top)
+            XCTAssertEqual(settings.signOverPageScale, compiled.signOverPageScale, "a scale of \(scale) was taken")
+            XCTAssertEqual(settings.signOverPageTop, compiled.signOverPageTop, "a top of \(top) was taken")
+            XCTAssertEqual(settings.copiedPause, 1.5, accuracy: 0.0001, "a refused field took another with it")
+        }
+    }
+
     /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.
     func testTheSignsTapWaitsTheLooksPause() {
         XCTAssertEqual(GitHubCodeSign.pause(Look().settings), .milliseconds(900))
@@ -861,17 +881,20 @@ final class ConnectionsScreenshots: XCTestCase {
         }
         XCTAssertNotEqual(try sign("ABCD-1234"), try sign("WXYZ-9876"), "the sign does not carry the code")
 
-        // Over GitHub's page too, where he is a still cut to what he draws.
-        func overPage(_ code: String) throws -> Data {
+        // Over GitHub's page too, where he is a still cut to what he draws: one code drawn twice
+        // is one picture, to the render server's shade, and two codes are two.
+        func overPage(_ code: String) throws -> [UInt8] {
             let image = try LookStage.image(GitHubCodeSign(code: code, copied: true, scale: 1, overPage: true, tapped: { _ in })
                 .environment(Mascot()), look: Look(), size: size)
             let attachment = XCTAttachment(image: image)
             attachment.name = "over-page-sign-\(code)"
             attachment.lifetime = .keepAlways
             add(attachment)
-            return try XCTUnwrap(image.pngData())
+            return try LookStage.bytes(image)
         }
-        XCTAssertNotEqual(try overPage("ABCD-1234"), try overPage("WXYZ-9876"), "the sign over the page does not carry the code")
+        let first = try overPage("ABCD-1234")
+        XCTAssertFalse(try LookStage.differ(first, try overPage("ABCD-1234")), "one code drew two pictures")
+        XCTAssertTrue(try LookStage.differ(first, try overPage("WXYZ-9876")), "the sign over the page does not carry the code")
     }
 
     /// The largest sign and line a look document can set fit a 320-point-wide page and leave the
