@@ -78,14 +78,15 @@ private final class RecordingBrowser: Browser {
     func close() { closes += 1 }
 }
 
-/// A browser that presents a full-screen page on the window it is given, as the system's sheet is
-/// presented on the app's window, and says it is up once it is.
+/// A browser that presents a page in a sheet on the window it is given, as the system presents its
+/// browser (`SFAuthenticationViewController`, a page sheet over the app's window), and says it is
+/// up once it is.
 private final class SheetBrowser: Browser {
     let window: UIWindow
     let page = UIViewController()
     init(window: UIWindow) {
         self.window = window
-        page.modalPresentationStyle = .fullScreen
+        page.modalPresentationStyle = .pageSheet
         page.view.backgroundColor = .systemBackground
     }
     func open(_ url: URL, shown: @escaping @MainActor (Bool) -> Void, dismissed: @escaping @MainActor () -> Void) {
@@ -703,7 +704,7 @@ final class ConnectionsScreenshots: XCTestCase {
     /// With GitHub's page up in a sheet presented on the app's window, the sign is drawn over it,
     /// in a window above the app's, carrying the code: the topmost thing a touch on the sign
     /// reaches is that window, and a touch beside it reaches the page. The sheet here is a
-    /// full-screen page standing in for the system's, which only a device or a simulator with
+    /// page sheet standing in for the system's, which only a device or a simulator with
     /// network reaches; the window goes with the page.
     func testTheSignIsDrawnOverGitHubsPageAndTakesTheTouch() async throws {
         let store = InMemoryConnectionStore()
