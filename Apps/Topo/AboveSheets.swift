@@ -26,13 +26,17 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
         anchor.show(nil, top: 0, width: 0)
     }
 
-    /// The view in the app's own window that finds the scene and holds the window above it.
+    /// The view in the app's own window that finds the scene and holds the window above it. The
+    /// scene is the one it was last in a window of: a sheet presented over the screen can take
+    /// the screen's views out of the window, which is the moment the window above is wanted.
     final class Anchor: UIView {
         private(set) var above: AboveSheetsWindow?
+        private weak var scene: UIWindowScene?
         private var wanted: (view: AnyView, top: CGFloat, width: CGFloat)?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
+            if let found = window?.windowScene { scene = found }
             place()
         }
 
@@ -42,7 +46,7 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
         }
 
         private func place() {
-            guard let wanted, let scene = window?.windowScene else {
+            guard let wanted, let scene else {
                 above?.isHidden = true
                 above = nil
                 return
