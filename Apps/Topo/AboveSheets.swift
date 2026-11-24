@@ -71,6 +71,7 @@ final class AboveSheetsWindow: UIWindow {
     /// Where it stands, read again at each placing: points under the screen's top.
     private var top: () -> CGFloat = { 0 }
     private var width: CGFloat = 0
+    private var geometry: NSKeyValueObservation?
 
     override init(windowScene: UIWindowScene) {
         super.init(windowScene: windowScene)
@@ -81,14 +82,19 @@ final class AboveSheetsWindow: UIWindow {
         host.safeAreaRegions = []
         backgroundColor = .clear
         rootViewController = host
-        // What the content measures follows the text size, and where it stands the screen's
-        // shape and the app window's safe area, none of which reaches the view that holds it.
-        // A rotation changes the size classes before the app window's safe area has followed,
-        // so it is placed again once that layout has run, too.
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitVerticalSizeClass.self,
-                                 UITraitHorizontalSizeClass.self]) { (window: AboveSheetsWindow, _) in
+        // What the content measures follows the text size, and where it stands the scene's
+        // geometry and the app window's safe area, none of which reaches the view that holds it.
+        // The geometry is observed as UIKit recommends, by KVO of `effectiveGeometry`, which a
+        // rotation and an iPad's resize both change; the app window's safe area follows the
+        // geometry in the layout after it, so it is placed again once that has run.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (window: AboveSheetsWindow, _) in
             window.reframe()
-            DispatchQueue.main.async { [weak window] in window?.reframe() }
+        }
+        geometry = windowScene.observe(\.effectiveGeometry) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.reframe()
+                DispatchQueue.main.async { [weak self] in self?.reframe() }
+            }
         }
     }
 
