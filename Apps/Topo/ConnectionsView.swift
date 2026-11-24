@@ -51,7 +51,7 @@ struct ConnectionsView: View {
     static func signOverPage(_ connections: Connections, look: Look) -> GitHubCodeSign? {
         connections.codeOverPage.map { code in
             GitHubCodeSign(code: code, copied: connections.codeCopied, scale: look.settings.signOverPageScale,
-                           hint: "Copies the code", identifier: "github-code-sign-over-page") { _ in
+                           hint: "Copies the code", identifier: "github-code-sign-over-page", overPage: true) { _ in
                 connections.copyCode()
             }
         }
@@ -197,6 +197,9 @@ struct GitHubCodeSign: View {
     /// What the tap does, said to VoiceOver, and the name a test finds the sign by.
     var hint = "Copies the code and opens GitHub"
     var identifier = "github-code-sign"
+    /// Over GitHub's page: him still, and the picture cut down to the top of what he draws, so
+    /// the empty sky the engine leaves over his head covers none of the page.
+    var overPage = false
     let tapped: (Duration) -> Void
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -215,6 +218,7 @@ struct GitHubCodeSign: View {
     }
 
     var body: some View {
+        let cut = overPageStill
         VStack(spacing: look.settings.signSpacing) {
             Button {
                 tapped(Self.pause(look.settings))
@@ -226,10 +230,10 @@ struct GitHubCodeSign: View {
                 // At most `signScale` times the engine's picture, and never wider than the page:
                 // the code on the sign is what the person reads, so none of it is cut off. The
                 // jump is inside that frame too (`drawnScale`).
-                picture
+                picture(cut?.image)
                     .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
                     .frame(maxWidth: CGFloat(Topo.width) * (scale ?? look.settings.signScale),
-                           maxHeight: CGFloat(Topo.height) * (scale ?? look.settings.signScale))
+                           maxHeight: CGFloat(Topo.height - (cut?.sky ?? 0)) * (scale ?? look.settings.signScale))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("GitHub code \(code)")
@@ -267,8 +271,43 @@ struct GitHubCodeSign: View {
         .milliseconds(Int((settings.copiedPause * 1000).rounded()))
     }
 
-    @ViewBuilder private var picture: some View {
-        if reduceMotion {
+    /// Over GitHub's page, the still he is drawn as, cut to what he draws, and the art pixels of
+    /// sky cut from it; nil elsewhere.
+    private var overPageStill: (image: CGImage, sky: Int)? {
+        guard overPage, let still = WidgetMascotView.still(input, steps: Self.settleSteps) else { return nil }
+        let cut = Self.cutSky(still)
+        return (cut, (still.height - cut.height) * Topo.height / max(still.height, 1))
+    }
+
+    /// The rows at the top of `image` with nothing drawn in them.
+    static func skyRows(_ image: CGImage) -> Int {
+        let width = image.width, height = image.height
+        var pixels = [UInt32](repeating: 0, count: width * height)
+        let drawn = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return 0 }
+        for row in 0..<height where pixels[(row * width)..<((row + 1) * width)].contains(where: { $0 >> 24 != 0 }) {
+            return row
+        }
+        return 0
+    }
+
+    /// `image` without its empty sky, cut on a whole art pixel so the picture keeps its grid.
+    static func cutSky(_ image: CGImage) -> CGImage {
+        let perArt = max(image.height / Topo.height, 1)
+        let rows = skyRows(image) / perArt * perArt
+        return image.cropping(to: CGRect(x: 0, y: rows, width: image.width, height: image.height - rows)) ?? image
+    }
+
+    @ViewBuilder private func picture(_ cut: CGImage?) -> some View {
+        if overPage {
+            if let cut { image(cut) }
+        } else if reduceMotion {
             if let still = WidgetMascotView.still(input, steps: Self.settleSteps) { image(still) }
         } else {
             TimelineView(.animation(minimumInterval: look.mascot.frameInterval, paused: covered)) { context in

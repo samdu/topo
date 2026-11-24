@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import TopoAuth
+import TopoMascot
 import TopoTools
 import UIKit
 import XCTest
@@ -302,6 +303,23 @@ final class ConnectionsTests: XCTestCase {
         sign.tapped(.zero)
         XCTAssertEqual(copied, [], "a cancelled connect's code was copied")
         github.release(.token)
+    }
+
+    /// The sky is the rows over the first drawn pixel, and the cut keeps every drawn row and
+    /// stays on a whole art pixel.
+    func testTheSkyCutKeepsWhatIsDrawn() throws {
+        let perArt = 3, width = Topo.width * perArt, height = Topo.height * perArt
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(UIColor.red.cgColor)
+        // One drawn row, 50 rows down in image terms (CoreGraphics' origin is the bottom).
+        context.fill(CGRect(x: 10, y: height - 51, width: 4, height: 1))
+        let image = try XCTUnwrap(context.makeImage())
+        XCTAssertEqual(GitHubCodeSign.skyRows(image), 50)
+        let cut = GitHubCodeSign.cutSky(image)
+        XCTAssertEqual(cut.height, height - 48, "the cut is not on a whole art pixel at or over the first drawn row")
+        XCTAssertEqual(GitHubCodeSign.skyRows(cut), 2)
     }
 
     /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.
@@ -758,8 +776,9 @@ final class ConnectionsScreenshots: XCTestCase {
         let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
         XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
 
-        // What the window draws: the sign, which is no blank, and reaches the window's foot, so
-        // the window takes no touch of the page's below what it draws.
+        // What the window draws: the sign, which is no blank, and reaches the window's head and
+        // foot, so the window takes no touch of the page's above or below what it draws (the
+        // engine's sky over his head included).
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
@@ -769,8 +788,10 @@ final class ConnectionsScreenshots: XCTestCase {
         add(attachment)
         XCTAssertGreaterThan(try colours(image), 8, "the sign over the page is drawn as a blank")
         let foot = Look().settings.signSpacing + 16
-        XCTAssertTrue(try drawn(image, below: image.size.height - foot),
+        XCTAssertTrue(try drawn(image, rows: (image.size.height - foot)..<image.size.height),
                       "nothing is drawn in the window's last \(foot) points: it is taller than the sign")
+        XCTAssertTrue(try drawn(image, rows: 0..<foot),
+                      "nothing is drawn in the window's first \(foot) points: the sky over his head is in it")
 
         // GitHub answers with the page still up: the sign goes, the page stays until the app
         // closes it.
@@ -782,8 +803,8 @@ final class ConnectionsScreenshots: XCTestCase {
         try await until("closed the page") { sheet.page.view.window == nil }
     }
 
-    /// Whether any pixel at or below `y` points is not clear.
-    private func drawn(_ image: UIImage, below y: CGFloat) throws -> Bool {
+    /// Whether any pixel in the rows `rows`, in points, is not clear.
+    private func drawn(_ image: UIImage, rows: Range<CGFloat>) throws -> Bool {
         let cgImage = try XCTUnwrap(image.cgImage)
         let width = cgImage.width, height = cgImage.height
         var pixels = [UInt32](repeating: 0, count: width * height)
@@ -791,8 +812,8 @@ final class ConnectionsScreenshots: XCTestCase {
                                               bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let first = max(0, Int(y * image.scale))
-        return pixels[(first * width)...].contains { $0 >> 24 != 0 }
+        let first = max(0, Int(rows.lowerBound * image.scale)), last = min(height, Int(rows.upperBound * image.scale))
+        return first < last && pixels[(first * width)..<(last * width)].contains { $0 >> 24 != 0 }
     }
 
     func testTheScreenInEachState() async throws {

@@ -19,7 +19,7 @@ struct AboveSheets<Content: View>: UIViewRepresentable {
     func makeUIView(context: Context) -> Anchor { Anchor() }
 
     func updateUIView(_ anchor: Anchor, context: Context) {
-        anchor.show(content.map { AnyView($0.fixedSize(horizontal: false, vertical: true)) }, top: top, width: width)
+        anchor.show(content.map { AnyView($0) }, top: top, width: width)
     }
 
     static func dismantleUIView(_ anchor: Anchor, coordinator: ()) {
@@ -98,8 +98,13 @@ final class AboveSheetsWindow: UIWindow {
     }
 
     private func reframe() {
-        frame = Self.frame(fitting: { self.host.sizeThatFits(in: $0) }, top: placed.top, width: placed.width,
-                           in: windowScene?.coordinateSpace.bounds ?? .zero)
+        // The height the content takes at that width when nothing bounds it, which is its own:
+        // a height proposed to it, the screen's, is a height a flexible frame in it fills.
+        frame = Self.frame(fitting: { size in
+            self.host.view.systemLayoutSizeFitting(CGSize(width: size.width, height: UIView.layoutFittingCompressedSize.height),
+                                                   withHorizontalFittingPriority: .required,
+                                                   verticalFittingPriority: .fittingSizeLevel)
+        }, top: placed.top, width: placed.width, in: windowScene?.coordinateSpace.bounds ?? .zero)
     }
 
     /// The content's own size, `width` wide at most and never wider or taller than the screen,
