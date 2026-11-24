@@ -138,13 +138,15 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
 hex="$(xxd -p "$work/key.p8" | tr -d '\n')"
 
-# listing <version> <state> [internal]: altool's listing of a pack whose highest version is
-# <version>, in <state>, with every version below it listed too, ready; its internal beta version
-# is [internal], the highest unless named.
+# listing <version> <state> [internal] [own state]: altool's listing of a pack whose highest
+# version is <version>, its internal beta release in <state> and its own state [own state] (<state>
+# unless named), with every version below it listed too, ready; its internal beta version is
+# [internal], the highest unless named.
 listing() {
-  jq -n --arg v "$1" --arg s "$2" --arg i "${3:-$1}" '{
+  jq -n --arg v "$1" --arg s "$2" --arg i "${3:-$1}" --arg o "${4:-$2}" '{
     assetPack: { relationships: { internalBetaVersion: { data: { type: "backgroundAssetVersions", id: ("id-" + $i) } } } },
-    assetPackVersions: [range(1; ($v | tonumber) + 1) | tostring | { assetPackVersionID: ("id-" + .), version: ., state: (if . == $v then $s else "READY_FOR_TESTING" end) }]
+    assetPackVersions: [range(1; ($v | tonumber) + 1) | tostring | { assetPackVersionID: ("id-" + .), version: .,
+      internalBetaReleaseState: (if . == $v then $s else "READY_FOR_TESTING" end), state: (if . == $v then $o else "READY_FOR_TESTING" end) }]
   }'
 }
 served() { # served: App Store Connect as the record has it, each pack's version 1 ready
@@ -415,6 +417,12 @@ refused ear-unread "parakeet-ultra: App Store Connect's versions of the pack cou
 echo 'not json' > "$work/packs/parakeet-ultra"
 refused ear-garbled "parakeet-ultra: App Store Connect's listing of the pack names no internal beta version"
 served
+# Readiness is the internal beta release's, whatever the version's own state says.
+listing 1 READY_FOR_TESTING 1 WAITING_FOR_REVIEW > "$work/packs/parakeet-ultra"
+ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-in-review" --upload \
+    || fail "an ear pack ready for internal testing and in external review was refused: $(cat "$work/out")"
+listing 1 PROCESSING 1 READY_FOR_TESTING > "$work/packs/parakeet-ultra"
+refused ear-internal-unready 'parakeet-ultra: version 1 on App Store Connect is PROCESSING, not READY_FOR_TESTING'
 # The internal beta version is the one judged, whatever the highest is.
 listing 2 READY_FOR_TESTING 1 > "$work/packs/parakeet-ultra"
 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-behind" --upload \

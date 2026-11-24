@@ -130,8 +130,8 @@ fi
 # Distribution/asset-packs.json records which bundle each pack's version was uploaded from: the
 # sha256 of the bundle.json it carries, which `<script> pin` prints without fetching. An upload is
 # refused, before anything is built, unless for each pack not uploaded with it the pin names the
-# recorded bundle and App Store Connect's internal beta version is the recorded one, ready for
-# testing. A pack uploaded with the build is recorded after its upload, read back from App Store
+# recorded bundle and App Store Connect's internal beta version is the recorded one, its internal
+# beta release READY_FOR_TESTING (a version's own state also moves with its external review). A pack uploaded with the build is recorded after its upload, read back from App Store
 # Connect, which numbers it; the record is then a change to commit before the next upload.
 packs="$root/Distribution/asset-packs.json"
 refuse() { printf '%s\n' "$@" >&2; exit 1; }
@@ -139,10 +139,10 @@ pack_listing() { # pack_listing <pack>: altool's JSON of its versions, empty whe
   xcrun altool --list-asset-pack-versions --apple-id "$apple_id" --asset-pack-identifier "$1" \
     --apiKey "$key_id" --apiIssuer "$issuer" --output-format json 2>"$listing_err"
 }
-pack_served() { # pack_served <listing>: "<version> <state> <highest version> <id>" of the internal beta version, or nothing
+pack_served() { # pack_served <listing>: "<version> <internal beta release state> <highest version> <id>" of the internal beta version, or nothing
   jq -r '(.assetPack.relationships.internalBetaVersion.data.id) as $id
     | ([.assetPackVersions[].version | tonumber] | max) as $top
-    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.state) \($top) \($id)"' <<<"$1" 2>/dev/null || true
+    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.internalBetaReleaseState) \($top) \($id)"' <<<"$1" 2>/dev/null || true
 }
 pack_read() { # pack_read <pack> <what has happened>: sets version, state, top and id, or refuses; 1 where it has no version
   local listing served
