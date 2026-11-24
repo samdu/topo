@@ -43,13 +43,17 @@ struct ConnectionsView: View {
 
     /// The sign over GitHub's page, carrying what the window above the sheet does not inherit.
     private var overPage: (some View)? {
+        Self.signOverPage(connections, look: look).map { $0.environment(mascot).environment(\.look, look) }
+    }
+
+    /// The sign held over GitHub's page while it is up (`codeOverPage`): its tap copies the code
+    /// and opens nothing, since the page is already the one it is for.
+    static func signOverPage(_ connections: Connections, look: Look) -> GitHubCodeSign? {
         connections.codeOverPage.map { code in
             GitHubCodeSign(code: code, copied: connections.codeCopied, scale: look.settings.signOverPageScale,
                            hint: "Copies the code", identifier: "github-code-sign-over-page") { _ in
                 connections.copyCode()
             }
-            .environment(mascot)
-            .environment(\.look, look)
         }
     }
 

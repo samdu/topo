@@ -57,9 +57,10 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
         if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 
-    /// Opens `url` in the sheet. `onShown` says whether the sheet is over the app: true once the
-    /// system has taken it (for one asked for while the app was not active, at the activation that
-    /// shows it), false when the system refuses it after all and it waits again.
+    /// Opens `url` in the sheet. `onShown` says whether the sheet is over the app: true each time
+    /// the system takes it (for one asked for while the app was not active, at the activation that
+    /// shows it), false each time the system refuses it, at its start or by its ending, and it
+    /// waits again.
     func open(_ url: URL, onShown: @escaping @MainActor (Bool) -> Void = { _ in }, onDismiss: @escaping @MainActor () -> Void) {
         close()
         retried = false

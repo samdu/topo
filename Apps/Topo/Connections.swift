@@ -504,8 +504,8 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
 /// The in-app browser, as `Connections` uses it.
 @MainActor
 protocol Browser {
-    /// Shows `url` in a sheet; `shown` says whether the system has it over the screen (true once
-    /// it is taken, false if it is refused after that), and `dismissed` is called once it has
+    /// Shows `url` in a sheet; `shown` says whether the system has it over the screen (true each
+    /// time it is taken, false each time it is refused), and `dismissed` is called once it has
     /// gone, closed or put away.
     func open(_ url: URL, shown: @escaping @MainActor (Bool) -> Void, dismissed: @escaping @MainActor () -> Void)
     func close()

@@ -274,19 +274,24 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertNil(connections.codeOverPage)
     }
 
-    /// The sign's tap over GitHub's page copies the code and opens nothing, so the page the person
-    /// is typing into is not loaded again under them; with the connect gone it copies nothing.
+    /// The sign over GitHub's page is there only while the page is, and its tap copies the code
+    /// and opens nothing, so the page the person is typing into is not loaded again under them,
+    /// whatever pause the sign hands its tap; with the connect gone it copies nothing.
     func testATapOverThePageCopiesAndOpensNothing() async throws {
         let connections = connections()
         connections.connectGitHub()
         await github.reach(.token)
         await settle()
+        XCTAssertNil(ConnectionsView.signOverPage(connections, look: Look()), "a sign over no page")
         connections.copyCodeAndOpenGitHub()
         await settle()
         browser.shown[0](true)
+        let sign = try XCTUnwrap(ConnectionsView.signOverPage(connections, look: Look()))
+        XCTAssertEqual(sign.code, "ABCD-1234")
+        XCTAssertEqual(sign.identifier, "github-code-sign-over-page", "two signs answer to one name")
         copied = []
-        connections.copyCode()
-        await settle()
+        sign.tapped(GitHubCodeSign.pause(Look().settings))
+        try await Task.sleep(for: .milliseconds(1200))
         XCTAssertEqual(copied, ["ABCD-1234"])
         XCTAssertEqual(browser.opened.count, 1, "the tap over the page opened it again")
         XCTAssertEqual(browser.closes, 0)
@@ -294,7 +299,7 @@ final class ConnectionsTests: XCTestCase {
 
         connections.cancelGitHub()
         copied = []
-        connections.copyCode()
+        sign.tapped(.zero)
         XCTAssertEqual(copied, [], "a cancelled connect's code was copied")
         github.release(.token)
     }
@@ -753,7 +758,8 @@ final class ConnectionsScreenshots: XCTestCase {
         let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
         XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
 
-        // What the window draws: the sign, which is no blank.
+        // What the window draws: the sign, which is no blank, and reaches the window's foot, so
+        // the window takes no touch of the page's below what it draws.
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
@@ -762,10 +768,31 @@ final class ConnectionsScreenshots: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertGreaterThan(try colours(image), 8, "the sign over the page is drawn as a blank")
+        let foot = Look().settings.signSpacing + 16
+        XCTAssertTrue(try drawn(image, below: image.size.height - foot),
+                      "nothing is drawn in the window's last \(foot) points: it is taller than the sign")
 
-        connections.cancelGitHub()
-        try await until("taken the sign away with the page") { above() == nil }
+        // GitHub answers with the page still up: the sign goes, the page stays until the app
+        // closes it.
         github.release(.token)
+        await github.reach(.login)
+        try await until("taken the sign away once GitHub answered") { above() == nil }
+        XCTAssertTrue(sheet.page.view.window === app, "the page went before the sign")
+        github.release(.login)
+        try await until("closed the page") { sheet.page.view.window == nil }
+    }
+
+    /// Whether any pixel at or below `y` points is not clear.
+    private func drawn(_ image: UIImage, below y: CGFloat) throws -> Bool {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width, height = cgImage.height
+        var pixels = [UInt32](repeating: 0, count: width * height)
+        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let first = max(0, Int(y * image.scale))
+        return pixels[(first * width)...].contains { $0 >> 24 != 0 }
     }
 
     func testTheScreenInEachState() async throws {

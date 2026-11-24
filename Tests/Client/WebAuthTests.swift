@@ -94,13 +94,17 @@ final class WebAuthTests: XCTestCase {
         XCTAssertEqual(stage.shown, ["device up"])
         stage.sheets[0].ended(.refused)
         await settle()
-        XCTAssertEqual(stage.shown.prefix(2), ["device up", "device refused"])
+        XCTAssertEqual(stage.shown, ["device up", "device refused", "device up"],
+                       "the sheet taken again once refused did not say it was up")
 
         let refusing = Stage()
         refusing.takes = false
         refusing.open("device")
         await settle()
-        XCTAssertFalse(refusing.shown.contains("device up"), "a sheet refused at its start said it was up")
+        XCTAssertEqual(refusing.shown, ["device refused", "device refused"], "a sheet refused at its start said it was up")
+        refusing.takes = true
+        refusing.web.activated()
+        XCTAssertEqual(refusing.shown.last, "device up", "the sheet the activation showed did not say it was up")
     }
 
     /// The system presents no sheet while the app is not active, which is where a sign-in
