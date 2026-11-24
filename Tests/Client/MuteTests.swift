@@ -125,10 +125,16 @@ final class MuteTests: XCTestCase {
         let send = try XCTUnwrap(conversation.send)
         // The brain never answers, so the mark the send makes is not taken away by a reply or a
         // failure before it is read.
-        let sending = Task { await send("what time is it") }
+        // The send's task is the main actor's, and everything up to the mark (the row, the wait
+        // and the mark itself) runs in the same job as the flag before its first suspension, the
+        // attempt: once the flag reads set, the mark or its absence is made.
+        let began = Flag()
+        let sending = Task { @MainActor in
+            began.set = true
+            await send("what time is it")
+        }
         defer { sending.cancel() }
-        // The mark, or its absence, is made before the send's attempt begins.
-        await settle("the send's attempt to begin") { harness.busy }
+        await settle("the send to begin") { began.set }
         let marked = defaults.stringArray(forKey: "topo.harness.spoken")?.count ?? 0
         if readsAloud {
             XCTAssertEqual(marked, 1, "an unmuted turn was not marked spoken: its reply would not be read aloud")
@@ -139,6 +145,12 @@ final class MuteTests: XCTestCase {
         speaker.endAllWaits("the test is done")
         conversation.send = nil
     }
+}
+
+/// Whether the send's task has begun.
+@MainActor
+private final class Flag {
+    var set = false
 }
 
 /// What the test moves to have the chat's holder draw it again.
