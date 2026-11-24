@@ -860,6 +860,18 @@ final class ConnectionsScreenshots: XCTestCase {
             return try XCTUnwrap(image.pngData())
         }
         XCTAssertNotEqual(try sign("ABCD-1234"), try sign("WXYZ-9876"), "the sign does not carry the code")
+
+        // Over GitHub's page too, where he is a still cut to what he draws.
+        func overPage(_ code: String) throws -> Data {
+            let image = try LookStage.image(GitHubCodeSign(code: code, copied: true, scale: 1, overPage: true, tapped: { _ in })
+                .environment(Mascot()), look: Look(), size: size)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "over-page-sign-\(code)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            return try XCTUnwrap(image.pngData())
+        }
+        XCTAssertNotEqual(try overPage("ABCD-1234"), try overPage("WXYZ-9876"), "the sign over the page does not carry the code")
     }
 
     /// The largest sign and line a look document can set fit a 320-point-wide page and leave the
