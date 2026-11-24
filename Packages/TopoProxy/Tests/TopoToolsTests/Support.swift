@@ -156,20 +156,13 @@ private func connect(host: NWEndpoint.Host, port: UInt16, current: Current) asyn
         let connection = NWConnection(host: host, port: NWEndpoint.Port(rawValue: port)!, using: parameters)
         let inbound = Inbound(connection, limit: 1 << 20)
         guard current.set(connection) else { return inbound }
-        let queue = DispatchQueue(label: "test.tools.client")
-        inbound.start(queue: queue)
-        let first = FirstState()
-        // Inbound's own handler goes on hearing every state; this one hears them first, on the
-        // queue the connection reports on.
-        queue.async {
-            let inbound = connection.stateUpdateHandler
-            connection.stateUpdateHandler = { state in
-                first.settle(state)
-                inbound?(state)
-            }
-            first.settle(connection.state)
-        }
-        guard case .waiting(.posix(.EADDRINUSE)) = await first.state, attempt < 50 else { return inbound }
+        inbound.start(queue: DispatchQueue(label: "test.tools.client"))
+        // Read rather than heard: the handler is Inbound's, and one put in front of it after the
+        // start misses a state reported before it was in place. A watchdog's cancel ends the wait.
+        var state = connection.state
+        while case .setup = state { try? await Task.sleep(for: .milliseconds(2)); state = connection.state }
+        while case .preparing = state { try? await Task.sleep(for: .milliseconds(2)); state = connection.state }
+        guard case .waiting(.posix(.EADDRINUSE)) = state, attempt < 50 else { return inbound }
         connection.cancel()
     }
     fatalError("unreachable")
@@ -195,40 +188,6 @@ private final class Current: @unchecked Sendable {
             cancelled = true
             return connection
         }?.cancel()
-    }
-}
-
-/// The first state a connection reaches past setting up: ready, waiting, failed or cancelled.
-private final class FirstState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var reached: NWConnection.State?
-    private var waiter: CheckedContinuation<NWConnection.State, Never>?
-
-    func settle(_ state: NWConnection.State) {
-        switch state {
-        case .setup, .preparing: return
-        default: break
-        }
-        let waiting = lock.withLock { () -> CheckedContinuation<NWConnection.State, Never>? in
-            guard reached == nil else { return nil }
-            reached = state
-            defer { waiter = nil }
-            return waiter
-        }
-        waiting?.resume(returning: state)
-    }
-
-    var state: NWConnection.State {
-        get async {
-            await withCheckedContinuation { continuation in
-                let now = lock.withLock { () -> NWConnection.State? in
-                    if let reached { return reached }
-                    waiter = continuation
-                    return nil
-                }
-                if let now { continuation.resume(returning: now) }
-            }
-        }
     }
 }
 
