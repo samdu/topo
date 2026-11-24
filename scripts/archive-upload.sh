@@ -131,7 +131,8 @@ fi
 # sha256 of the bundle.json it carries, which `<script> pin` prints without fetching. An upload is
 # refused, before anything is built, unless for each pack not uploaded with it the pin names the
 # recorded bundle and App Store Connect's internal beta version is the recorded one, its internal
-# beta release READY_FOR_TESTING (a version's own state also moves with its external review). A pack uploaded with the build is recorded after its upload, read back from App Store
+# beta release READY_FOR_TESTING (`internalBetaReleaseState`, the release an internal build is served;
+# the version's `state` is not read). A pack uploaded with the build is recorded after its upload, read back from App Store
 # Connect, which numbers it; the record is then a change to commit before the next upload.
 packs="$root/Distribution/asset-packs.json"
 refuse() { printf '%s\n' "$@" >&2; exit 1; }
@@ -200,8 +201,8 @@ pack_record() { # pack_record <pack> <script> <ids listed before its upload>: th
   # Exactly one version is new since the listing before the upload, so it is this upload's; with
   # two, another upload landed between the listings and which bundle each holds is unknown.
   local new
-  new="$(grep -vxF -f <(printf '%s\n' "$3") <<<"$ids" || true)"
-  [ "$new" = "$id" ] && [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
+  if [ -n "$3" ]; then new="$(grep -vxF -f <(printf '%s\n' "$3") <<<"$ids" || true)"; else new="$ids"; fi
+  [ "$new" = "$id" ] && [ "$state" = READY_FOR_TESTING ] \
     || refuse "$pack: after its upload App Store Connect serves version $version ($state), $(grep -qxF "$id" <<<"$3" && echo "a version listed before the upload" || echo "a new one"), its highest is $top, and $(grep -c . <<<"$new" || true) version(s) are new since the listing before it." "$after"
   jq --arg p "$pack" --arg v "$version" --arg b "$bundle" '.[$p] = { version: $v, bundle: $b }' "$packs" > "$packs.new"
   mv "$packs.new" "$packs"
@@ -210,8 +211,8 @@ pack_record() { # pack_record <pack> <script> <ids listed before its upload>: th
 if [ "$upload" = yes ]; then
   listing_err="$(mktemp)"
   trap 'rm -rf "$keys"; rm -f "$listing_err"' EXIT
-  jq -se 'length == 1 and (.[0] | type == "object")' "$packs" >/dev/null 2>&1 \
-    || refuse "Distribution/asset-packs.json is missing or not one JSON object, so no pack's version can be judged. Nothing was built."
+  jq -se 'length == 1 and (.[0] | type == "object" and all(.[]; type == "object"))' "$packs" >/dev/null 2>&1 \
+    || refuse "Distribution/asset-packs.json is missing or not one JSON object of objects, so no pack's version can be judged. Nothing was built."
   [ "$ear" = yes ] || pack_check parakeet-ultra --ear ear-bundle.sh
   [ "$voice" = yes ] || pack_check phonon-40m-en --voice phonon-bundles.sh
 fi
