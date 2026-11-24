@@ -3,7 +3,7 @@
 # repository: a bundle.json that is not the pinned one is refused, nothing of it kept and no file
 # it lists fetched, and the refusal names the digests. No token is asked for of a file URL. Past
 # an admitted bundle.json, every file it lists is fetched, and one not at the size or the sha256
-# it names is refused and not kept.
+# it names is refused and not kept. `pin` prints the admitted bundle.json's digest.
 #
 #   scripts/tests/phonon-bundles-test.sh
 set -uo pipefail
@@ -62,6 +62,9 @@ if fetches "$work/whole"; then
     || fail "an admitted bundle.json's voice was not fetched: $(cat "$work/log")"
   [ "$(cat "$work/whole/phonon-40m-en/host.safetensors" 2>/dev/null)" = "host weights" ] \
     || fail "an admitted bundle.json's host weights were not fetched: $(cat "$work/log")"
+  # `pin` names the bundle.json the pack carries, asking nobody for a token and fetching nothing.
+  [ "$(HF_TOKEN= PATH="/usr/bin:/bin:/opt/homebrew/bin" "$admitted/scripts/phonon-bundles.sh" pin 2>&1)" = "$(digest "$work/whole/phonon-40m-en/bundle.json")" ] \
+    || fail "pin does not print the digest of the bundle.json the bundle carries"
 else
   fail "a whole bundle at its pin was refused: $(cat "$work/log")"
 fi
@@ -78,4 +81,4 @@ else grep -q "the pin says 11 bytes, $(printf '%064d' 0)" "$work/log" || fail "t
 [ ! -e "$work/digest/phonon-40m-en/voices/Friendly Octopus.safetensors" ] || fail "a payload with the wrong digest was kept"
 [ -z "$(find "$work/size" "$work/digest" -name '*.part' 2>/dev/null)" ] || fail "a refused payload's partial download was left behind"
 
-[ "$failures" = 0 ] && echo "phonon-bundles.sh admits no bundle.json but its pin, and no file it lists but at its size and digest" || { echo "$failures failure(s)"; exit 1; }
+[ "$failures" = 0 ] && echo "phonon-bundles.sh admits no bundle.json but its pin, and no file it lists but at its size and digest, and pin names that bundle.json" || { echo "$failures failure(s)"; exit 1; }

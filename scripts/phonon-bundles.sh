@@ -7,6 +7,7 @@
 #
 #   scripts/phonon-bundles.sh [directory]
 #   scripts/phonon-bundles.sh package [directory]   # ... and the asset pack for App Store Connect
+#   scripts/phonon-bundles.sh pin                   # the sha256 of the bundle.json the pack carries, fetching nothing
 #
 # With no directory and not `package` — publish-topo.sh's call, for the install page's builds,
 # which embed both bundles — it also fetches the ear's bundle into build/ear (scripts/ear-bundle.sh).
@@ -25,6 +26,9 @@ manifest_sha=51a609c3c856affd94d866997457fe7fcf755171ea19ce16ace00a7fa375f5f0
 manifest_size=2945
 token_ref='op://Homelab/opqt7nwkxvoau6hxuwpjx47rpe/user access token'
 base="${PHONON_REPO_URL:-https://huggingface.co/$repo/resolve/$revision/$name}"
+
+# bundle.json is admitted only at this digest, so it names the bundle.
+if [ "${1-}" = pin ]; then echo "$manifest_sha"; exit 0; fi
 
 package=no
 if [ "${1-}" = package ]; then package=yes; shift; fi
