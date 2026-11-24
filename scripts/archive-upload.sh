@@ -60,11 +60,6 @@ done
 build="${BUILD:-$(( ($(date +%s) - 1767225600) / 60 ))}"
 echo "==> build $build"
 
-# The guest's kernel is built from the fork at its pin, never committed; the archive links it.
-"$(dirname "${BASH_SOURCE[0]}")/build-ish.sh"
-# The voice's compiled core, fetched by checksum and never committed; the archive links it.
-"$(dirname "${BASH_SOURCE[0]}")/fetch-phonon.sh"
-
 # The About screen names the commit this build is as its corresponding source, which is only
 # true of a clean tree whose commit is on GitHub.
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -140,56 +135,77 @@ fi
 # Connect, which numbers it; the record is then a change to commit before the next upload.
 packs="$root/Distribution/asset-packs.json"
 refuse() { printf '%s\n' "$@" >&2; exit 1; }
-pack_listing() { # pack_listing <pack>: altool's JSON of its versions, empty where it has none
+pack_listing() { # pack_listing <pack>: altool's JSON of its versions, empty where it has none; what it said in $listing_err
   xcrun altool --list-asset-pack-versions --apple-id "$apple_id" --asset-pack-identifier "$1" \
-    --apiKey "$key_id" --apiIssuer "$issuer" --output-format json 2>/dev/null
+    --apiKey "$key_id" --apiIssuer "$issuer" --output-format json 2>"$listing_err"
 }
-pack_served() { # pack_served <listing>: "<version> <state> <highest version>", or nothing
+pack_served() { # pack_served <listing>: "<version> <state> <highest version> <id>" of the internal beta version, or nothing
   jq -r '(.assetPack.relationships.internalBetaVersion.data.id) as $id
     | ([.assetPackVersions[].version | tonumber] | max) as $top
-    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.state) \($top)"' <<<"$1" 2>/dev/null || true
+    | .assetPackVersions[] | select(.assetPackVersionID == $id) | "\(.version) \(.state) \($top) \($id)"' <<<"$1" 2>/dev/null || true
 }
-pack_read() { # pack_read <pack>: sets version, state and top from App Store Connect, or refuses
+pack_read() { # pack_read <pack> <what has happened>: sets version, state, top and id, or refuses; 1 where it has no version
   local listing served
-  listing="$(pack_listing "$1")" || refuse "$1: App Store Connect's versions of the pack could not be read (altool --list-asset-pack-versions failed); nothing was built."
+  listing="$(pack_listing "$1")" \
+    || refuse "$1: App Store Connect's versions of the pack could not be read: $(sed '/^[[:space:]]*$/d' "$listing_err" | tail -1)" "$2"
   [ -n "$listing" ] || return 1
   served="$(pack_served "$listing")"
-  [ -n "$served" ] || refuse "$1: App Store Connect's listing of the pack names no internal beta version it lists; nothing was built."
-  read -r version state top <<<"$served"
+  [ -n "$served" ] || refuse "$1: App Store Connect's listing of the pack names no internal beta version it lists." "$2"
+  read -r version state top id <<<"$served"
 }
 pack_check() { # pack_check <pack> <flag> <script>
   local pack="$1" flag="$2" script="$3" bundle recorded recorded_bundle
-  local instead="scripts/archive-upload.sh --validate --upload $flag"
-  bundle="$("$root/scripts/$script" pin)"
-  recorded="$(jq -r --arg p "$pack" '.[$p].version // empty' "$packs" 2>/dev/null || true)"
-  recorded_bundle="$(jq -r --arg p "$pack" '.[$p].bundle // empty' "$packs" 2>/dev/null || true)"
+  local instead="scripts/archive-upload.sh --validate --upload $flag" nothing="Nothing was built."
+  bundle="$("$root/scripts/$script" pin)" || refuse "$pack: scripts/$script pin failed. $nothing"
+  recorded="$(jq -r --arg p "$pack" '.[$p].version // empty' "$packs")"
+  recorded_bundle="$(jq -r --arg p "$pack" '.[$p].bundle // empty' "$packs")"
   [ -n "$recorded" ] && [ "$bundle" = "$recorded_bundle" ] \
-    || refuse "$pack: the bundle scripts/$script pins ($bundle) is not the one Distribution/asset-packs.json records${recorded:+ version $recorded} as uploaded from, so a build uploaded without the pack would be served another bundle. Nothing was built." \
+    || refuse "$pack: the bundle scripts/$script pins ($bundle) is not the one Distribution/asset-packs.json records${recorded:+ version $recorded} as uploaded from, so a build uploaded without the pack would be served another bundle. $nothing" \
               "Run instead: $instead"
-  pack_read "$pack" \
-    || refuse "$pack: App Store Connect has no version of the pack, so a fresh install of this build would have none. Nothing was built." \
+  pack_read "$pack" "$nothing" \
+    || refuse "$pack: App Store Connect has no version of the pack, so a fresh install of this build would have none. $nothing" \
               "Run instead: $instead"
   [ "$version" = "$recorded" ] \
-    || refuse "$pack: App Store Connect serves version $version (the highest is $top) and Distribution/asset-packs.json records version $recorded as this pin's. Nothing was built." \
+    || refuse "$pack: App Store Connect serves version $version (the highest is $top) and Distribution/asset-packs.json records version $recorded as this pin's. $nothing" \
               "If version $version was uploaded from this pin, record it and commit that; otherwise run instead: $instead"
-  [ "$state" = READY_FOR_TESTING ] \
-    || refuse "$pack: version $version on App Store Connect is $state, not READY_FOR_TESTING. Nothing was built; run this again once it is."
+  case "$state" in
+    READY_FOR_TESTING) ;;
+    FAILED) refuse "$pack: version $version on App Store Connect FAILED. $nothing" "Run instead: $instead" ;;
+    *) refuse "$pack: version $version on App Store Connect is $state, not READY_FOR_TESTING. $nothing Run this again once it is." ;;
+  esac
   echo "==> $pack: version $version on App Store Connect is this pin's"
 }
-pack_record() { # pack_record <pack> <script>: the version just uploaded, into the record
-  local pack="$1" bundle
-  bundle="$("$root/scripts/$2" pin)"
-  pack_read "$pack" || refuse "$pack: App Store Connect lists no version of the pack after its upload; the build was not uploaded."
-  [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
-    || refuse "$pack: after its upload App Store Connect serves version $version ($state) and its highest is $top; the build was not uploaded."
+pack_known() { # pack_known <pack>: the ids of the versions App Store Connect lists now, before an upload
+  local listing
+  listing="$(pack_listing "$1")" \
+    || refuse "$1: App Store Connect's versions of the pack could not be read before its upload: $(sed '/^[[:space:]]*$/d' "$listing_err" | tail -1)" \
+              "The archive was built; neither the pack nor the build was uploaded."
+  [ -z "$listing" ] || jq -r '.assetPackVersions[].assetPackVersionID' <<<"$listing" 2>/dev/null \
+    || refuse "$1: App Store Connect's listing of the pack before its upload is not one this reads." "The archive was built; neither the pack nor the build was uploaded."
+}
+pack_record() { # pack_record <pack> <script> <ids listed before its upload>: the version just uploaded, into the record
+  local pack="$1" bundle after="The pack was uploaded and the build was not; the pack's new version is not recorded. Read it with altool --list-asset-pack-versions and record it in Distribution/asset-packs.json if it is this pin's."
+  bundle="$("$root/scripts/$2" pin)" || refuse "$pack: scripts/$2 pin failed." "$after"
+  pack_read "$pack" "$after" || refuse "$pack: App Store Connect lists no version of the pack after its upload." "$after"
+  ! grep -qxF "$id" <<<"$3" && [ "$version" = "$top" ] && [ "$state" = READY_FOR_TESTING ] \
+    || refuse "$pack: after its upload App Store Connect serves version $version ($state), $(grep -qxF "$id" <<<"$3" && echo "a version listed before the upload" || echo "a new one"), and its highest is $top." "$after"
   jq --arg p "$pack" --arg v "$version" --arg b "$bundle" '.[$p] = { version: $v, bundle: $b }' "$packs" > "$packs.new"
   mv "$packs.new" "$packs"
   echo "==> $pack: version $version recorded in Distribution/asset-packs.json; commit it before the next upload"
 }
 if [ "$upload" = yes ]; then
+  listing_err="$(mktemp)"
+  trap 'rm -rf "$keys"; rm -f "$listing_err"' EXIT
+  jq -e 'type == "object"' "$packs" >/dev/null 2>&1 \
+    || refuse "Distribution/asset-packs.json is missing or not a JSON object, so no pack's version can be judged. Nothing was built."
   [ "$ear" = yes ] || pack_check parakeet-ultra --ear ear-bundle.sh
   [ "$voice" = yes ] || pack_check phonon-40m-en --voice phonon-bundles.sh
 fi
+
+# The guest's kernel is built from the fork at its pin, never committed; the archive links it.
+"$(dirname "${BASH_SOURCE[0]}")/build-ish.sh"
+# The voice's compiled core, fetched by checksum and never committed; the archive links it.
+"$(dirname "${BASH_SOURCE[0]}")/fetch-phonon.sh"
 
 # The packages resolve into build/packages, kept for the pins they were resolved from and made
 # afresh for any other, never into the derived data Xcode shares between builds: Xcode 27.2
@@ -250,16 +266,18 @@ fi
 
 if [ "$upload" = yes ] && [ "$voice" = yes ]; then
   echo "==> uploading the voice's asset pack"
+  known="$(pack_known phonon-40m-en)" || exit 1
   xcrun altool --upload-asset-pack "$out/phonon/phonon-40m-en.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
-  pack_record phonon-40m-en phonon-bundles.sh
+  pack_record phonon-40m-en phonon-bundles.sh "$known"
 fi
 
 if [ "$upload" = yes ] && [ "$ear" = yes ]; then
   echo "==> uploading the ear's asset pack"
+  known="$(pack_known parakeet-ultra)" || exit 1
   xcrun altool --upload-asset-pack "$out/ear/parakeet-ultra.aar" --apple-id "$apple_id" --wait \
     --apiKey "$key_id" --apiIssuer "$issuer"
-  pack_record parakeet-ultra ear-bundle.sh
+  pack_record parakeet-ultra ear-bundle.sh "$known"
 fi
 
 if [ "$upload" = yes ]; then

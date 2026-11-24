@@ -40,7 +40,7 @@ echo "ear-bundle.sh $*" >> "$CALLS"
 FAKE
 chmod +x "$tree/scripts/ear-bundle.sh"
 for fake in build-ish.sh fetch-phonon.sh; do
-  printf '#!/bin/sh\nexit 0\n' > "$tree/scripts/$fake"
+  printf '#!/bin/sh\necho %s >> "$CALLS"\n' "$fake" > "$tree/scripts/$fake"
   chmod +x "$tree/scripts/$fake"
 done
 touch "$tree/Distribution/ExportOptions.plist"
@@ -138,11 +138,12 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param
     || { echo "FAIL: could not make a key to test with" >&2; exit 1; }
 hex="$(xxd -p "$work/key.p8" | tr -d '\n')"
 
-# listing <version> <state>: altool's listing of a pack whose internal beta version is <version>,
-# with every version below it listed too.
+# listing <version> <state> [internal]: altool's listing of a pack whose highest version is
+# <version>, in <state>, with every version below it listed too, ready; its internal beta version
+# is [internal], the highest unless named.
 listing() {
-  jq -n --arg v "$1" --arg s "$2" '{
-    assetPack: { relationships: { internalBetaVersion: { data: { type: "backgroundAssetVersions", id: ("id-" + $v) } } } },
+  jq -n --arg v "$1" --arg s "$2" --arg i "${3:-$1}" '{
+    assetPack: { relationships: { internalBetaVersion: { data: { type: "backgroundAssetVersions", id: ("id-" + $i) } } } },
     assetPackVersions: [range(1; ($v | tonumber) + 1) | tostring | { assetPackVersionID: ("id-" + .), version: ., state: (if . == $v then $s else "READY_FOR_TESTING" end) }]
   }'
 }
@@ -352,6 +353,29 @@ grep -q -- '--upload-app' "$work/ear-unready" && fail "the build was uploaded be
 git -C "$tree" diff --quiet -- Distribution/asset-packs.json || fail "an ear pack that is not ready was recorded"
 grep -q 'after its upload App Store Connect serves version 2 (PROCESSING)' "$work/out" || fail "the unready pack is not said: $(cat "$work/out")"
 served
+# after <case> <what the refusal says> [.after listing]: an ear upload App Store Connect does not
+# answer with a new served version is not recorded, the build is not uploaded, and the refusal
+# says the pack went up.
+after() {
+  local name="$1" says="$2"
+  if EAR_PIN=ear-two ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/$name" --upload --ear; then
+    fail "$name: the upload went on"
+  fi
+  grep -q -- '--upload-asset-pack' "$work/$name" || fail "$name: the pack was not uploaded: $(cat "$work/$name")"
+  grep -q -- '--upload-app' "$work/$name" && fail "$name: the build was uploaded: $(cat "$work/$name")"
+  git -C "$tree" diff --quiet -- Distribution/asset-packs.json || fail "$name: the pack was recorded: $(cat "$tree/Distribution/asset-packs.json")"
+  grep -q -- "$says" "$work/out" || fail "$name: the refusal does not say '$says': $(cat "$work/out")"
+  grep -q 'The pack was uploaded and the build was not' "$work/out" || fail "$name: the refusal does not say the pack went up: $(cat "$work/out")"
+  grep -q 'Nothing was built' "$work/out" && fail "$name: the refusal says nothing was built: $(cat "$work/out")"
+  git -C "$tree" checkout -q Distribution/asset-packs.json; served
+}
+after ear-unchanged 'serves version 1 (READY_FOR_TESTING), a version listed before the upload'
+listing 2 READY_FOR_TESTING 1 > "$work/packs/parakeet-ultra.after"
+after ear-not-served 'serves version 1 (READY_FOR_TESTING), a version listed before the upload, and its highest is 2'
+listing 3 READY_FOR_TESTING 2 > "$work/packs/parakeet-ultra.after"
+after ear-overtaken 'serves version 2 (READY_FOR_TESTING), a new one, and its highest is 3'
+echo fail > "$work/packs/parakeet-ultra.after"
+after ear-unread-after "parakeet-ultra: App Store Connect's versions of the pack could not be read: ERROR: could not list"
 ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-local" --ear \
     || fail "packaging the ear failed: $(cat "$work/out")"
 grep -q 'altool' "$work/ear-local" && fail "--ear without --upload reached altool: $(cat "$work/ear-local")"
@@ -371,7 +395,7 @@ refused() {
       "$tree/scripts/archive-upload.sh" --upload > "$work/out" 2>&1; then
     fail "$name: the upload was not refused"
   fi
-  grep -q '^xcodebuild\|upload-' "$work/$name" && fail "$name: something was built or uploaded: $(cat "$work/$name")"
+  grep -q '^xcodebuild\|upload-\|build-ish\|fetch-phonon' "$work/$name" && fail "$name: something was built or uploaded: $(cat "$work/$name")"
   grep -q -- "$says" "$work/out" || fail "$name: the refusal does not say '$says': $(cat "$work/out")"
   [ -z "$(ls "$work/tmp")" ] || fail "$name: the key outlived the refusal: $(ls "$work/tmp")"
 }
@@ -391,10 +415,26 @@ refused ear-unread "parakeet-ultra: App Store Connect's versions of the pack cou
 echo 'not json' > "$work/packs/parakeet-ultra"
 refused ear-garbled "parakeet-ultra: App Store Connect's listing of the pack names no internal beta version"
 served
+# The internal beta version is the one judged, whatever the highest is.
+listing 2 READY_FOR_TESTING 1 > "$work/packs/parakeet-ultra"
+ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/ear-behind" --upload \
+    || fail "an ear pack served at the recorded version beside a higher one was refused: $(cat "$work/out")"
+served
 printf '{"phonon-40m-en":{"version":"1","bundle":"voice-one"}}\n' > "$tree/Distribution/asset-packs.json"
 git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'no ear record'
 git -C "$tree" update-ref refs/remotes/origin/main HEAD
 refused ear-unrecorded 'parakeet-ultra: the bundle scripts/ear-bundle.sh pins (ear-one) is not the one Distribution/asset-packs.json records as uploaded from'
+# A record that is not JSON is said as that, before anything is built, with both packs' flags too.
+printf 'not json {\n' > "$tree/Distribution/asset-packs.json"
+git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'garbled record'
+git -C "$tree" update-ref refs/remotes/origin/main HEAD
+refused record-garbled 'Distribution/asset-packs.json is missing or not a JSON object'
+: > "$work/record-both"
+if ASC_KEY_ID=KEYID12345 ASC_ISSUER_ID=an-issuer ASC_PRIVATE_KEY="$hex" run "$work/record-both" --upload --ear --voice; then
+    fail "an upload of both packs over a garbled record went on"
+fi
+grep -q '^xcodebuild\|upload-\|build-ish' "$work/record-both" && fail "an upload of both packs over a garbled record built something: $(cat "$work/record-both")"
+grep -q 'Distribution/asset-packs.json is missing or not a JSON object' "$work/out" || fail "a garbled record with both flags is not said: $(cat "$work/out")"
 printf '%s\n' "$record" > "$tree/Distribution/asset-packs.json"
 git -C "$tree" -c user.name=test -c user.email=test@example.com commit -q -am 'record'
 git -C "$tree" update-ref refs/remotes/origin/main HEAD
