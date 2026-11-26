@@ -166,6 +166,18 @@ struct MascotLean: Equatable, Sendable {
         if heading == nil, abs(angle) < 0.002 { angle = 0 }
     }
 
+    /// Where his arms stream in his own picture once he is upright: straight behind him, in
+    /// degrees as `trail` gives them.
+    static let behind = 90.0
+
+    /// His arms `dt` seconds on as he rights himself, from `trail` toward `behind` at the rate he
+    /// comes upright, the short way round, so what he takes up once upright starts from them there.
+    static func righting(_ trail: Double, _ dt: Double) -> Double {
+        let left = (behind - trail) * .pi / 180
+        let way = trail + atan2(sin(left), cos(left)) * 180 / .pi * min(1, max(dt, 0) * upright)
+        return atan2(sin(way * .pi / 180), cos(way * .pi / 180)) * 180 / .pi
+    }
+
     /// Upright at once: Reduce Motion, or he stands nowhere.
     mutating func reset() { angle = 0 }
 

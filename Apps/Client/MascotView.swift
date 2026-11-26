@@ -637,10 +637,9 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         if let roam {
             let swimming = roam.swimming && input.sign == nil
             lean.step(dt, heading: swimming ? roam.course : nil)
-            // Righting himself, his arms come in to straight behind him as he comes upright, so
-            // what he takes up next starts from them there.
+            // Righting himself, his arms come in to straight behind him as he comes upright.
             if !swimming, lean.angle != 0, let trail = lastTrail {
-                lastTrail = trail + (90 - trail) * min(1, max(dt, 0) * MascotLean.upright)
+                lastTrail = MascotLean.righting(trail, dt)
             }
         }
         sync()

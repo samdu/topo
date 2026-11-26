@@ -386,12 +386,22 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertTrue(swam, "he never swam")
         XCTAssertEqual(worn, ["swimOpen", "swimThrust", "swimTrail"], "not the stroke's poses while he swam")
         var righting = 0
+        func behind() -> Double? {
+            canvas.driver.input.trail.map { abs(atan2(sin(($0 - MascotLean.behind) * .pi / 180), cos(($0 - MascotLean.behind) * .pi / 180))) * 180 / .pi }
+        }
+        var off = behind()
         while canvas.lean.angle != 0, righting < 120 {
             XCTAssertEqual(canvas.driver.input.activity, "swimTrail", "a pose other than the glide drawn turned")
             canvas.step(1.0 / 30)
             righting += 1
+            // His arms, as handed to the engine, come in toward straight behind him and never away.
+            if canvas.lean.angle != 0, let now = behind(), let was = off {
+                XCTAssertLessThanOrEqual(now, was + 1e-6, "his arms swung away from behind him while he righted himself")
+                off = now
+            }
         }
         XCTAssertEqual(canvas.lean.angle, 0, "never upright")
+        if let off { XCTAssertLessThan(off, 5, "upright with his arms \(off)° from straight behind him") }
         XCTAssertEqual(canvas.driver.input.activity, "thinking", "the swim put him back to something else")
         XCTAssertEqual(canvas.driver.input.corner, 0, "the engine's own stroll is not his to take")
     }

@@ -122,4 +122,22 @@ final class MascotSwimTests: XCTestCase {
         left.step(1.0 / 60, heading: CGVector(dx: -1, dy: 0))
         XCTAssertLessThan(left.angle, 0, "turned the long way round")
     }
+
+    /// Righting himself, his arms come in to straight behind him the short way round, at the rate
+    /// he comes upright, and stay within a half turn either side of 0.
+    func testHisArmsComeInToBehindHimTheShortWayRound() {
+        XCTAssertEqual(MascotLean.righting(MascotLean.behind, 1.0 / 60), MascotLean.behind, accuracy: 1e-9)
+        XCTAssertEqual(MascotLean.righting(0, 1), MascotLean.behind, accuracy: 1e-9, "a whole second's rate is all the way")
+        // From -170 the short way to 90 is through 180, not through 0.
+        var trail = -170.0
+        for _ in 0..<5 {
+            let next = MascotLean.righting(trail, 1.0 / 60)
+            XCTAssertTrue(next < trail || next > 0, "from \(trail) it went toward 0: \(next)")
+            XCTAssertLessThanOrEqual(abs(next), 180)
+            trail = next
+        }
+        let first = MascotLean.righting(-170, 1.0 / 60)
+        XCTAssertEqual(first, 360 - 170 - 100 * (MascotLean.upright / 60), accuracy: 1e-9, "not the short way, wrapped into ±180")
+    }
+
 }

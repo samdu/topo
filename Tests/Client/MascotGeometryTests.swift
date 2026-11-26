@@ -642,7 +642,7 @@ final class MascotGeometryTests: XCTestCase {
             var lastTrail: Double?
             func frame(_ activity: String, course: CGVector?, righting: Bool = false) {
                 lean.step(dt, heading: course)
-                if righting, let t = lastTrail { lastTrail = t + (90 - t) * min(1, dt * MascotLean.upright) }
+                if righting, let t = lastTrail { lastTrail = MascotLean.righting(t, dt) }
                 let trail = course.map { lean.trail($0) } ?? (righting ? lastTrail : nil)
                 if course != nil { lastTrail = trail }
                 engine.update(dt, TopoInput(tokens: run.tokens, level: run.level, activity: activity, corner: 0,
