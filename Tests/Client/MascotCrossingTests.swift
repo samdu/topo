@@ -120,9 +120,21 @@ final class MascotCrossingTests: XCTestCase {
     func testADescendingPersonsTurnAndItsSpringBackAreOneSwimOverIt() throws {
         let (roam, field) = try assertCrossings("crossing-down", glides: 1)
         let picture = try XCTUnwrap(roam.picture)
-        let below = try XCTUnwrap(Self.bubbles(in: field).filter { $0.minY >= picture.maxY }.min { $0.minY < $1.minY },
-                                  "no person's turn below him")
-        XCTAssertLessThanOrEqual(picture.maxY + Self.settings.clearance, below.minY + MascotRoost.epsilon)
+        // The bubble that descended is the nearest above him as the recording opens; the bubbles
+        // scroll together, so it keeps its place among them, and he ends above it, not merely
+        // above some bubble further down.
+        let recording = try trace("crossing-down")
+        let first = try XCTUnwrap(recording.events.compactMap(\.field).first)
+        func bubbles(_ field: MascotField) -> [CGRect] {
+            field.obstacles.filter { $0.width > 300 && abs($0.height - 167) < 2 }.sorted { $0.minY < $1.minY }
+        }
+        let opening = bubbles(first), closing = bubbles(field)
+        XCTAssertEqual(opening.count, closing.count, "the recording's bubbles are not the same ones at its end")
+        let rank = try XCTUnwrap(opening.lastIndex { $0.maxY <= recording.standing.y + MascotRoost.epsilon },
+                                 "no person's turn above him as the recording opens")
+        let descended = closing[rank]
+        XCTAssertLessThanOrEqual(picture.maxY + Self.settings.clearance, descended.minY + MascotRoost.epsilon,
+                                 "he did not end above the bubble that descended on him, \(descended)")
         XCTAssertFalse(Self.bubbles(in: field).contains { $0.intersects(picture) }, "he ended over a person's turn")
     }
 

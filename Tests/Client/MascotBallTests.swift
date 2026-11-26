@@ -188,6 +188,78 @@ final class MascotBallTests: XCTestCase {
         XCTAssertEqual(roam.moves, moves)
     }
 
+    /// One ball a stretch of motion: words that move again once they have been quiet are a new
+    /// stretch, and he balls up again.
+    func testAStretchOfMotionAfterAQuietOneBallsHimUpAgain() throws {
+        let far = { (y: CGFloat) in MascotRoamTests.field([CGRect(x: 0, y: y, width: 402, height: 40)]) }
+        let (placed, start) = settled(far(10))
+        var roam = placed
+        var time = start, y: CGFloat = 10
+        var balls = 0, balled = false
+        for stretch in 0..<2 {
+            for _ in 0..<6 {
+                time += Self.frame
+                y -= 1
+                roam.observe(far(y), at: time)
+                roam.advance(to: time)
+                if roam.ball != nil, !balled { balls += 1 }
+                balled = roam.ball != nil
+            }
+            // Quiet, past `quietFor` and the settle, before the next.
+            let still = time
+            while time < still + MascotRoam.quietFor + Self.settings.settle + 0.1 {
+                time += Self.frame
+                roam.advance(to: time)
+                if roam.ball != nil, !balled { balls += 1 }
+                balled = roam.ball != nil
+            }
+            XCTAssertNil(roam.ball, "stretch \(stretch): the ball outlived the quiet")
+        }
+        XCTAssertEqual(balls, 2, "two stretches of motion apart are not a ball each")
+    }
+
+    /// A provisional shot is not judged against the words, but the pane, the well or the keyboard
+    /// across the rest of its way turns it: the keyboard rising over where it is going sends him
+    /// somewhere it is not, and his reach is off it on every frame.
+    func testTheKeyboardAcrossAProvisionalShotTurnsIt() throws {
+        // A turn just under him rises, so the place on its far side is below it and the shot goes
+        // down the screen, where a keyboard can come up across it and not over him.
+        let rising = { (dy: CGFloat, keyboard: CGRect?) -> MascotField in
+            var field = MascotRoamTests.field([CGRect(x: 0, y: 410 - dy, width: 402, height: 120)])
+            field.keyboard = keyboard
+            return field
+        }
+        let (placed, start) = settled(rising(0, nil))
+        var roam = placed
+        var time = start, dy: CGFloat = 0
+        while roam.move == nil, time < start + 0.5 {
+            time += Self.frame
+            dy += 400 * CGFloat(Self.frame)
+            roam.observe(rising(dy, nil), at: time)
+            roam.advance(to: time)
+        }
+        let shot = try XCTUnwrap(roam.move)
+        XCTAssertTrue(shot.provisional)
+        // The keyboard comes up over where the shot is going and not over him, the words still
+        // moving: its top between the foot of his reach and the foot of the reach where it ends.
+        let here = Self.settings.reach.around(try XCTUnwrap(roam.picture))
+        let there = Self.settings.reach.around(CGRect(origin: shot.to, size: Self.settings.size))
+        guard there.maxY > here.maxY + 2 else { return XCTFail("the shot does not go down the screen: \(here.maxY) to \(there.maxY)") }
+        let keyboard = CGRect(x: 0, y: (here.maxY + there.maxY) / 2, width: 402, height: 700)
+        time += Self.frame
+        dy += 400 * CGFloat(Self.frame)
+        roam.observe(rising(dy, keyboard), at: time)
+        let turned = try XCTUnwrap(roam.move, "the keyboard over its way stopped him rather than turning him")
+        XCTAssertNotEqual(turned.to, shot.to, "the keyboard over its way did not turn the shot")
+        for _ in 0..<120 {
+            time += Self.frame
+            roam.advance(to: time)
+            let reach = Self.settings.reach.around(try XCTUnwrap(roam.picture))
+            XCTAssertLessThanOrEqual(reach.maxY, keyboard.minY + MascotRoost.epsilon, "on the keyboard at \(time - start)")
+            guard roam.needsTime else { break }
+        }
+    }
+
     /// The transcript going back to unread lets go of a ball at once: nothing is decided while it is.
     func testABallIsLetGoWhenTheTranscriptIsToBeReadAgain() throws {
         let far = { (y: CGFloat) in MascotRoamTests.field([CGRect(x: 0, y: y, width: 402, height: 40)]) }
