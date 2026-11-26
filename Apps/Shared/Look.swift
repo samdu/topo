@@ -524,6 +524,9 @@ struct Look: Equatable, Sendable {
         var signOverPageScale: CGFloat = 1
         var signOverPageTop: CGFloat = 84
         static let signOverPageTopRange: ClosedRange<Double> = 80...400
+        /// How fast he comes up from the foot of the screen to that place, in points a second.
+        var signOverPageSpeed: CGFloat = 240
+        static let signOverPageSpeedRange: ClosedRange<Double> = 60...2000
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the
