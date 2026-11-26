@@ -89,6 +89,8 @@ final class HubModel {
     /// This launch's key for the nudge's channel, at its listener's port, and whether its record
     /// has been saved: minted once a launch, never logged.
     private var nudgeKey: NudgeKey?
+    /// The router's public port onto the nudge's channel, for a phone off the home network.
+    private let portMapping = HubPortMapping()
     private var nudgeKeySaved = false
     /// The kind of the last failure to save the key's record, while it is not saved.
     private(set) var nudgeKeyFailure: String?
@@ -352,6 +354,11 @@ final class HubModel {
         }
         status = .up
         while !Task.isCancelled {
+            if let key = nudgeKey, key.publicEndpoint != portMapping.endpoint {
+                nudgeKey = key.reached(at: portMapping.endpoint)
+                nudgeKeySaved = false
+                Self.log.notice("hub channel's public endpoint now \(self.portMapping.endpoint ?? "none", privacy: .public)")
+            }
             await saveNudgeKey()
             await followSwitch()
             await refreshLease()
@@ -392,6 +399,14 @@ final class HubModel {
             })
             port = try await server.start()
             nudgeKey = key.on(port: await server.securePort ?? 0)
+            // The router's mapping before the key's first save, so a phone that reads this
+            // launch's key has the public endpoint with it; a router that answers in 3 s or not at
+            // all leaves it out until the run loop sees one.
+            if let channel = nudgeKey?.port, channel != 0, portMapping.start(port: channel) {
+                for _ in 0..<30 where portMapping.endpoint == nil { try? await Task.sleep(for: .milliseconds(100)) }
+                nudgeKey = nudgeKey?.reached(at: portMapping.endpoint)
+            }
+            Self.log.notice("hub channel's public endpoint \(self.nudgeKey?.publicEndpoint ?? "none", privacy: .public)")
             self.server = server
             Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(self.port ?? 0), the nudge's channel on \(self.nudgeKey?.port ?? 0), store \(self.store.rawValue, privacy: .public)")
         }

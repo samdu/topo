@@ -55,7 +55,6 @@ public enum HubNudge {
                             reachable: @Sendable (_ host: String, _ port: UInt16) async -> Bool = { _, _ in true },
                             stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
         guard let endpoint = lease.endpoint, let (host, _) = hostAndPort(endpoint) else { return .unreached("noEndpoint") }
-        if Unreached.shared.recently(endpoint) { return .unreached("recently") }
         let key: NudgeKey
         switch await keys.key(for: lease, in: database) {
         case .key(let found, let read):
@@ -68,8 +67,10 @@ public enum HubNudge {
             Perf.mark("nudge.key unread \(kind)")
             return .unreached("keyUnread")
         }
-        guard await reachable(host, key.port) else { return .unreached("gated") }
-        let answer = await send(for: lease, mark: mark, key: key, stream: stream)
+        // The local network gate is the LAN host's alone: a public endpoint is the internet's.
+        let lanAllowed = await reachable(host, key.port)
+        guard lanAllowed || key.publicEndpoint != nil else { return .unreached("gated") }
+        let answer = await send(for: lease, mark: mark, key: key, lan: lanAllowed, stream: stream)
         if case .unreached(let kind) = answer, dropsKey(kind) { await keys.failed(key) }
         return answer
     }
@@ -91,49 +92,22 @@ public enum HubNudge {
     /// still under way at the bound over a TCP connection that was made (`handshakeTimeout`,
     /// told by `TCPReached` beneath the channel's TLS).
     static func send(for lease: Lease, mark: String, key: NudgeKey, connectBound: TimeInterval = connectBound,
-                     answerBound: TimeInterval = answerBound,
+                     answerBound: TimeInterval = answerBound, lan: Bool = true,
                      stream: (@Sendable (ReplyFrame) async -> Void)? = nil) async -> Answer {
-        guard let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint) else {
-            return .unreached("noEndpoint")
-        }
-        guard key.hub == lease.holder, let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 else {
-            return .unreached("noKey")
-        }
         guard ProbeWire.isMark(Substring(mark)) else { return .unreached("badMark") }
-        if Unreached.shared.recently(endpoint) { return .unreached("recently") }
-        let stage = Stage()
-        let parameters = NudgeTLS.parameters(key)
-        parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
-        let connection = NWConnection(host: host, port: port, using: parameters)
-        // Each bound cancels the connection, which fails whichever step is pending.
-        let connecting = Task {
-            try? await Task.sleep(for: .seconds(connectBound))
-            if stage.isConnecting { connection.cancel() }
+        let connection: NWConnection
+        switch await connect(lease: lease, key: key, lan: lan, connectBound: connectBound,
+                             label: "zone.hexagon.topo.link.nudge", made: { _ in true }) {
+        case .failure(let failure): return .unreached(failure.kind)
+        case .success(let made): connection = made
         }
         // From the moment the line is sent.
         var answering: Task<Void, Never>?
         defer {
-            connecting.cancel()
             answering?.cancel()
             connection.cancel()
         }
         return await withTaskCancellationHandler {
-            connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.nudge"))
-            do {
-                try await connection.waitUntilReady()
-            } catch {
-                let kind = Self.kind(error, connection, stage)
-                // A connect that failed or ran out, off the hub's network: not tried again for a
-                // while. Local network access refused is the gate's, not the network's, and a
-                // refused handshake is the key's.
-                if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
-                return .unreached(kind)
-            }
-            // What the handshake agreed, not what was asked for, admits the hub.
-            guard NudgeTLS.agreed(connection) else { return .unreached("agreement") }
-            stage.connected()
-            Unreached.shared.reached(endpoint)
-            Perf.mark("nudge.connected")
             do {
                 try await connection.send(ProbeWire.nudge(lease, mark: mark, stream: stream != nil))
             } catch {
@@ -148,6 +122,107 @@ public enum HubNudge {
         } onCancel: {
             connection.cancel()
         }
+    }
+
+    /// A connect that reached no candidate, by the kind of its failure.
+    struct ConnectFailure: Error { let kind: String }
+
+    /// Where a hub's channel may be: the lease's host at the key's port (the LAN, while `lan`
+    /// says the local network may be asked) and the key's public endpoint (the hub's router's
+    /// mapping), each with a name for marks.
+    static func candidates(lease: Lease, key: NudgeKey, lan: Bool) -> [(name: String, endpoint: String, host: NWEndpoint.Host, port: NWEndpoint.Port)] {
+        var out: [(name: String, endpoint: String, host: NWEndpoint.Host, port: NWEndpoint.Port)] = []
+        if lan, let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint),
+           let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 {
+            out.append(("lan", endpoint, host, port))
+        }
+        if let endpoint = key.publicEndpoint, let (host, port) = SocketLeaseProbe.parse(endpoint) {
+            out.append(("public", endpoint, host, port))
+        }
+        return out
+    }
+
+    /// Opens the channel `key` opens to the holder of `lease`, trying every candidate at once
+    /// (`candidates`) and keeping the first whose handshake agreed; the rest are cancelled. A
+    /// candidate whose connect failed within `connectBound` is remembered (`Unreached`) and
+    /// skipped while it is. Every connection made is handed to `made` before it starts, which
+    /// says false once its caller is cancelled. With every candidate failed, the failure is a
+    /// handshake's or an agreement's if any (the hub was reached and refused the key), else the
+    /// last candidate's.
+    static func connect(lease: Lease, key: NudgeKey, lan: Bool, connectBound: TimeInterval, label: String,
+                        made: @escaping @Sendable (NWConnection) -> Bool) async -> Result<NWConnection, ConnectFailure> {
+        guard key.hub == lease.holder, key.port != 0 else { return .failure(ConnectFailure(kind: "noKey")) }
+        let all = candidates(lease: lease, key: key, lan: lan)
+        guard !all.isEmpty else { return .failure(ConnectFailure(kind: "noEndpoint")) }
+        let tried = all.filter { !Unreached.shared.recently($0.endpoint) }
+        guard !tried.isEmpty else { return .failure(ConnectFailure(kind: "recently")) }
+        return await withTaskGroup(of: (Int, Result<NWConnection, ConnectFailure>).self) { group in
+            for (index, candidate) in tried.enumerated() {
+                group.addTask {
+                    (index, await attempt(candidate.name, candidate.endpoint, candidate.host, candidate.port, key: key,
+                                          connectBound: connectBound, label: label, made: made))
+                }
+            }
+            var failures: [Int: String] = [:]
+            while let (index, result) = await group.next() {
+                switch result {
+                case .success(let connection):
+                    group.cancelAll()
+                    // A loser that also finished is closed; the group's end waits for the rest.
+                    while let (_, other) = await group.next() {
+                        if case .success(let late) = other { late.cancel() }
+                    }
+                    return .success(connection)
+                case .failure(let failure):
+                    failures[index] = failure.kind
+                }
+            }
+            let kinds = (0..<tried.count).compactMap { failures[$0] }
+            return .failure(ConnectFailure(kind: kinds.first(where: { ["handshake", "agreement"].contains($0) }) ?? kinds.last ?? "connect"))
+        }
+    }
+
+    /// One candidate of `connect`.
+    private static func attempt(_ name: String, _ endpoint: String, _ host: NWEndpoint.Host, _ port: NWEndpoint.Port,
+                                key: NudgeKey, connectBound: TimeInterval, label: String,
+                                made: @Sendable (NWConnection) -> Bool) async -> Result<NWConnection, ConnectFailure> {
+        let stage = Stage()
+        let parameters = NudgeTLS.parameters(key)
+        parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
+        let connection = NWConnection(host: host, port: port, using: parameters)
+        guard made(connection) else { return .failure(ConnectFailure(kind: "cancelled")) }
+        // The bound cancels the connection, which fails whichever step is pending.
+        let connecting = Task {
+            try? await Task.sleep(for: .seconds(connectBound))
+            if stage.isConnecting { connection.cancel() }
+        }
+        defer { connecting.cancel() }
+        connection.start(queue: DispatchQueue(label: label))
+        do {
+            try await withTaskCancellationHandler {
+                try await connection.waitUntilReady()
+            } onCancel: {
+                connection.cancel()
+            }
+        } catch {
+            if Task.isCancelled { return .failure(ConnectFailure(kind: "cancelled")) }
+            let kind = Self.kind(error, connection, stage)
+            Perf.mark("nudge.candidate \(name) \(kind)")
+            // A connect that failed or ran out, off that candidate's network: not tried again for
+            // a while. A refused handshake is the key's.
+            if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
+            return .failure(ConnectFailure(kind: kind))
+        }
+        // What the handshake agreed, not what was asked for, admits the hub.
+        guard NudgeTLS.agreed(connection) else {
+            connection.cancel()
+            Perf.mark("nudge.candidate \(name) agreement")
+            return .failure(ConnectFailure(kind: "agreement"))
+        }
+        stage.connected()
+        Unreached.shared.reached(endpoint)
+        Perf.mark("nudge.connected via=\(name)")
+        return .success(connection)
     }
 
     /// The hub's answer to a nudge on `lines`, with the frames of a streamed reply handed to
@@ -188,6 +263,8 @@ public enum HubNudge {
         private var cancelled = false
         private var lines: NWConnection.Lines?
         private var opening: Task<Bool, Never>?
+        /// The candidates' connections while they race, all cancelled with the heads-up.
+        private var attempts: [NWConnection] = []
 
         /// How long the hub is given to answer the heads-up once the line is sent: it answers at once.
         public static let answerBound: TimeInterval = 2
@@ -237,41 +314,30 @@ public enum HubNudge {
 
         /// Connects, sends `coming` and reads the hub's answer: `read` stands for `ready`.
         private func opening(_ key: NudgeKey, connectBound: TimeInterval, answerBound: TimeInterval) async -> Answer {
-            guard let endpoint = lease.endpoint, let (host, _) = SocketLeaseProbe.parse(endpoint) else {
-                return .unreached("noEndpoint")
-            }
-            guard key.hub == lease.holder, let port = NWEndpoint.Port(rawValue: key.port), key.port != 0 else {
-                return .unreached("noKey")
-            }
+            guard lease.endpoint != nil || key.publicEndpoint != nil else { return .unreached("noEndpoint") }
             guard ProbeWire.isMark(Substring(mark)) else { return .unreached("badMark") }
-            if Unreached.shared.recently(endpoint) { return .unreached("recently") }
-            let stage = Stage()
-            let parameters = NudgeTLS.parameters(key)
-            parameters.defaultProtocolStack.applicationProtocols.append(TCPReached.options(telling: stage))
-            let connection = NWConnection(host: host, port: port, using: parameters)
+            let connection: NWConnection
+            switch await HubNudge.connect(lease: lease, key: key, lan: true, connectBound: connectBound,
+                                          label: "zone.hexagon.topo.link.coming", made: { [weak self] made in
+                guard let self else { return false }
+                return self.lock.withLock {
+                    guard !self.cancelled else { return false }
+                    self.attempts.append(made)
+                    return true
+                }
+            }) {
+            case .failure(let failure):
+                if lock.withLock({ cancelled }) { return .unreached("cancelled") }
+                return .unreached(failure.kind)
+            case .success(let made):
+                connection = made
+            }
             guard lock.withLock({ () -> Bool in
                 guard !cancelled else { return false }
                 self.connection = connection
+                self.attempts = []
                 return true
-            }) else { return .unreached("cancelled") }
-            // Each bound cancels the connection, which fails whichever step is pending.
-            let connecting = Task {
-                try? await Task.sleep(for: .seconds(connectBound))
-                if stage.isConnecting { connection.cancel() }
-            }
-            defer { connecting.cancel() }
-            connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.coming"))
-            do {
-                try await connection.waitUntilReady()
-            } catch {
-                let kind = HubNudge.kind(error, connection, stage)
-                if lock.withLock({ cancelled }) { return .unreached("cancelled") }
-                if kind == "connect" || kind == "connectTimeout" { Unreached.shared.failed(endpoint) }
-                return .unreached(kind)
-            }
-            guard NudgeTLS.agreed(connection) else { return .unreached("agreement") }
-            stage.connected()
-            Unreached.shared.reached(endpoint)
+            }) else { connection.cancel(); return .unreached("cancelled") }
             guard (try? await connection.send(ProbeWire.coming(lease, mark: mark))) != nil else { return .unreached("send") }
             Perf.mark("turn.coming.sent turn=\(mark)")
             let answering = Task {
@@ -345,7 +411,9 @@ public enum HubNudge {
         }
 
         private func close() {
-            lock.withLock { connection }?.cancel()
+            let (connection, attempts) = lock.withLock { (self.connection, self.attempts) }
+            connection?.cancel()
+            attempts.forEach { $0.cancel() }
         }
     }
 

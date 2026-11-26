@@ -640,6 +640,7 @@
 		DC25633B35DCEE9FC4CAF4DA /* MascotPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D347C50B63441358B49281F4 /* MascotPlacementTests.swift */; };
 		DC666B236B6D9E0AAB52CF9F /* PhotosTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F58195D812623D0E6E9353 /* PhotosTool.swift */; };
 		DCA0B0BEC5F836EA77CB1224 /* tracker-minimal-light.png in Resources */ = {isa = PBXBuildFile; fileRef = D3257C0ABEB10180E8491A5E /* tracker-minimal-light.png */; };
+		DD18271C41283DB8859EB52F /* HubPortMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D9E3B6B10DA053C8B6FE8DA /* HubPortMapping.swift */; };
 		DD64D1E2A148897696D8D976 /* MediaServicesResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07CEEB7CCB0CBAF9BBB7D520 /* MediaServicesResetTests.swift */; };
 		DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */; };
 		DD907806586C00822627ED3D /* WidgetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8108B3927AEA30E13C582080 /* WidgetStoreTests.swift */; };
@@ -1077,6 +1078,7 @@
 		7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceStore.swift; sourceTree = "<group>"; };
 		7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestImageStoreTests.swift; sourceTree = "<group>"; };
 		7AD7EBDF0E8E899C8BB65C01 /* SmartTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartTurnTests.swift; sourceTree = "<group>"; };
+		7D9E3B6B10DA053C8B6FE8DA /* HubPortMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubPortMapping.swift; sourceTree = "<group>"; };
 		7DAF4F582AA9DEC3750965B0 /* HubPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubPush.swift; sourceTree = "<group>"; };
 		7DF1F487D22E6037A5F25CF5 /* WorkingSounds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingSounds.swift; sourceTree = "<group>"; };
 		7F8E7A9C85F0395AEB61379F /* MascotDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotDriverTests.swift; sourceTree = "<group>"; };
@@ -1610,6 +1612,7 @@
 			children = (
 				48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */,
 				8809A0CAEB64B3D22525D3DD /* HubModel.swift */,
+				7D9E3B6B10DA053C8B6FE8DA /* HubPortMapping.swift */,
 				7DAF4F582AA9DEC3750965B0 /* HubPush.swift */,
 				B2F92FDD0A90790863EA800E /* Info.plist */,
 				11800CD3827F773B71C8B1B7 /* QRImage.swift */,
@@ -3022,6 +3025,7 @@
 				78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */,
 				27485C4D8AD306F226B648E3 /* ControlDocument.swift in Sources */,
 				826779FB38E9EDF80785009F /* HubModel.swift in Sources */,
+				DD18271C41283DB8859EB52F /* HubPortMapping.swift in Sources */,
 				AA35BFC7CCB9C02ED424A310 /* HubPush.swift in Sources */,
 				57A02AD74FF8C5FD0E586035 /* Look.swift in Sources */,
 				3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */,

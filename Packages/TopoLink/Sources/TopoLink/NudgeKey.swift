@@ -22,12 +22,17 @@ public struct NudgeKey: Sendable, Equatable, CustomStringConvertible, CustomDebu
     let secret: Data
     /// The secure listener's port; 0 until it is bound.
     public let port: UInt16
+    /// Where the listener is reached from off the hub's network, `a.b.c.d:port`: the external
+    /// address and port the hub's router mapped to the listener (NAT-PMP, PCP or UPnP), or nil
+    /// with no mapping. A phone tries it beside the lease's host (`HubNudge`).
+    public let publicEndpoint: String?
 
-    init(hub: DeviceID, identity: String, secret: Data, port: UInt16) {
+    init(hub: DeviceID, identity: String, secret: Data, port: UInt16, publicEndpoint: String? = nil) {
         self.hub = hub
         self.identity = identity
         self.secret = secret
         self.port = port
+        self.publicEndpoint = publicEndpoint
     }
 
     /// A fresh key for `hub`, from the system's secure generator.
@@ -44,11 +49,19 @@ public struct NudgeKey: Sendable, Equatable, CustomStringConvertible, CustomDebu
     }
 
     /// The same key, at the port its listener was bound to.
-    public func on(port: UInt16) -> NudgeKey { NudgeKey(hub: hub, identity: identity, secret: secret, port: port) }
+    public func on(port: UInt16) -> NudgeKey {
+        NudgeKey(hub: hub, identity: identity, secret: secret, port: port, publicEndpoint: publicEndpoint)
+    }
+
+    /// The same key, reached from off the hub's network at `publicEndpoint` (nil: not at all).
+    public func reached(at publicEndpoint: String?) -> NudgeKey {
+        NudgeKey(hub: hub, identity: identity, secret: secret, port: port, publicEndpoint: publicEndpoint)
+    }
 
     public var description: String { "NudgeKey(\(identity))" }
     public var debugDescription: String { description }
-    public var customMirror: Mirror { Mirror(self, children: ["hub": hub, "identity": identity, "port": port]) }
+    public var customMirror: Mirror { Mirror(self, children: ["hub": hub, "identity": identity, "port": port,
+                                                          "publicEndpoint": publicEndpoint as Any]) }
 
     /// A record that is not a whole key — another type, another hub's name, a secret of the wrong
     /// length, an identity that is not sixteen hex digits, no port — is no key.
@@ -58,7 +71,8 @@ public struct NudgeKey: Sendable, Equatable, CustomStringConvertible, CustomDebu
               let identity = record.string("identity"), Self.isIdentity(identity),
               let encoded = record.string("secret"), let secret = Data(base64Encoded: encoded), secret.count == Self.secretLength,
               let port = record.int("port"), (1...Int64(UInt16.max)).contains(port) else { return nil }
-        self.init(hub: hub, identity: identity, secret: secret, port: UInt16(port))
+        let reachable = record.string("publicEndpoint").flatMap { SocketLeaseProbe.parse($0) == nil ? nil : $0 }
+        self.init(hub: hub, identity: identity, secret: secret, port: UInt16(port), publicEndpoint: reachable)
     }
 
     static func isIdentity(_ identity: String) -> Bool {
@@ -66,13 +80,15 @@ public struct NudgeKey: Sendable, Equatable, CustomStringConvertible, CustomDebu
     }
 
     func record(changeTag: String?) -> Record {
-        Record(type: Self.recordType, id: Self.recordID(for: hub), fields: [
+        var fields: [String: FieldValue] = [
             "hub": .string(hub.rawValue),
             "identity": .string(identity),
             "secret": .string(secret.base64EncodedString()),
             "port": .int(Int64(port)),
             "mintedAt": .date(Date()),
-        ], changeTag: changeTag)
+        ]
+        if let publicEndpoint { fields["publicEndpoint"] = .string(publicEndpoint) }
+        return Record(type: Self.recordType, id: Self.recordID(for: hub), fields: fields, changeTag: changeTag)
     }
 
     /// Writes this key over the hub's record, whatever it held: the hub is its only writer.
