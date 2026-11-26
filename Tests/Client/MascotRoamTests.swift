@@ -10,7 +10,7 @@ import XCTest
 final class MascotRoamTests: XCTestCase {
     static let size = MascotSprite.size(scale: 2.0 / 3)
     static let reach = MascotSprite.reach(scale: 2.0 / 3)
-    static let settings = MascotRoam.Settings(size: size, clearance: 8, reach: reach, speed: 40, settle: 0.6)
+    static let settings = MascotRoam.Settings(size: size, clearance: 8, reach: reach, settle: 0.6)
     static let frame = 1.0 / 30
 
     static func field(_ obstacles: [CGRect]) -> MascotField {
@@ -90,13 +90,13 @@ final class MascotRoamTests: XCTestCase {
             time += Self.frame
             roam.advance(to: time)
             assertCoveredExactlyWhenOverlapped(roam, "t \(time)")
-            if roam.walking {
+            if roam.swimming {
                 if roam.covered { hiddenOnTheWay = true } else {
                     shownOnTheWay = true
                     if hiddenOnTheWay { shownAfterHidden = true }
                 }
             }
-            if roam.moves > 0, !roam.walking, !roam.needsTime { break }
+            if roam.moves > 0, !roam.swimming, !roam.needsTime { break }
         }
         XCTAssertEqual(roam.moves, 1, "one glide, never restarted")
         XCTAssertTrue(hiddenOnTheWay, "his way never crossed the turns")
@@ -107,68 +107,29 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertNotEqual(roam.position, from)
     }
 
-    /// The glide is at the look's speed on average and eased at both ends: it takes the distance
-    /// over the speed, and it starts and ends slower than it goes in the middle.
-    func testTheGlideIsAtTheLooksSpeedEasedAtBothEnds() {
-        let move = MascotRoam.Move(from: .zero, to: CGPoint(x: 400, y: 0), duration: 10)
-        let first = move.at(1).x - move.at(0).x
-        let middle = move.at(5.5).x - move.at(4.5).x
-        let last = move.at(10).x - move.at(9).x
-        XCTAssertLessThan(first, middle / 4)
-        XCTAssertLessThan(last, middle / 4)
-        XCTAssertEqual(move.at(10), CGPoint(x: 400, y: 0))
-        XCTAssertEqual(move.at(20), CGPoint(x: 400, y: 0))
-
-        // In the roam: a glide of d points takes d / speed seconds.
+    /// A move is a swim of whole strokes of the look's stride (`MascotSwim`), and one begun with a
+    /// word over him is in a hurry from its first frame to its last: the pace is set as it begins,
+    /// and the clock moves it on by real time, covered or not.
+    func testAMoveIsASwimOfTheLooksStrideHurriedOutFromUnderAWord() throws {
         let (placed, start) = settled(Self.field([]))
         var roam = placed
-        let picture = roam.picture!
+        let picture = try XCTUnwrap(roam.picture)
         roam.observe(Self.field([CGRect(x: 0, y: picture.minY - 4, width: 402, height: 628 - picture.minY + 4)]), at: start)
+        XCTAssertTrue(roam.covered)
         var time = start
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
-        let glide = try! XCTUnwrap(roam.move)
-        let distance = hypot(glide.to.x - glide.from.x, glide.to.y - glide.from.y)
-        XCTAssertEqual(glide.duration, Double(distance / 40), accuracy: 1e-9)
-    }
-
-    /// While anything is over him he goes at `hurry` times the stroll, and at the stroll the frame
-    /// he is clear: a glide across a turn is fast over it and slow either side of it, frame by
-    /// frame, and still ends where it was going.
-    func testAGlideAcrossATurnIsFastOverItAndSlowEitherSide() throws {
-        // He stands low; a turn lands over him and another lies between him and the only gap, at
-        // the top, so his way up starts covered, comes clear, crosses the second and comes clear.
-        // A clearance of 40 makes the room between the turns too little for a roost, though his
-        // picture fits in it.
-        var settings = Self.settings
-        settings.clearance = 40
-        let (placed, start) = settled(Self.field([]), settings)
-        var roam = placed
-        let rows = [CGRect(x: 0, y: 170, width: 402, height: 90), CGRect(x: 0, y: 380, width: 402, height: 160)]
-        roam.observe(Self.field(rows), at: start)
-        var time = start
-        var fast = 0
-        var slow = 0
-        var pace: [Bool] = []
-        while time < start + 60 {
-            let wasCovered = roam.covered
-            let before = roam.move
+        let swim = try XCTUnwrap(roam.move)
+        let distance = hypot(swim.to.x - swim.from.x, swim.to.y - swim.from.y)
+        XCTAssertEqual(swim.swim.strokes, max(1, Int((distance / Self.settings.stride).rounded())))
+        XCTAssertEqual(swim.pace, Double(Self.settings.hurry), "out from under a word at the cruise")
+        while let before = roam.move, time < start + 60 {
             time += Self.frame
             roam.advance(to: time)
-            if let before, let after = roam.move {
-                let stepped = after.elapsed - before.elapsed
-                XCTAssertEqual(stepped, Self.frame * (wasCovered ? 10 : 1), accuracy: 1e-9,
-                               "covered \(wasCovered) at \(time)")
-                if wasCovered { fast += 1 } else { slow += 1 }
-                if pace.last != wasCovered { pace.append(wasCovered) }
-            }
-            if roam.moves > 0, !roam.walking, !roam.needsTime { break }
+            guard let after = roam.move else { break }
+            XCTAssertEqual(after.elapsed - before.elapsed, Self.frame, accuracy: 1e-9, "at \(time)")
+            XCTAssertEqual(after.pace, swim.pace, "the pace changed under way at \(time)")
         }
-        XCTAssertEqual(roam.moves, 1)
-        XCTAssertGreaterThan(fast, 0, "never in a hurry over a turn")
-        XCTAssertGreaterThan(slow, 0, "never back to the stroll")
-        XCTAssertEqual(pace, [true, false, true, false], "fast over each turn and slow either side")
-        let to = try XCTUnwrap(roam.picture)
-        XCTAssertLessThanOrEqual(to.maxY, 170 - 40 + 0.001, "he did not arrive in the gap at the top")
+        XCTAssertNil(roam.move)
         XCTAssertFalse(roam.covered)
     }
 
@@ -192,8 +153,8 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.covered)
     }
 
-    /// The hurry is the look's: at 1 there is none, and he strolls out from under a turn.
-    func testAHurryOfOneIsTheStroll() throws {
+    /// The hurry is the look's: at 1 there is none, and he swims out from under a turn at the cruise.
+    func testAHurryOfOneIsTheCruise() throws {
         var settings = Self.settings
         settings.hurry = 1
         let (placed, start) = settled(Self.field([]), settings)
@@ -203,15 +164,12 @@ final class MascotRoamTests: XCTestCase {
         var time = start
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
         XCTAssertTrue(roam.covered)
-        let before = try XCTUnwrap(roam.move).elapsed
-        time += Self.frame
-        roam.advance(to: time)
-        XCTAssertEqual(try XCTUnwrap(roam.move).elapsed - before, Self.frame, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(roam.move).pace, 1)
     }
 
     /// The transcript reports its geometry on every frame of a scroll. While it streams with no
-    /// pause, no glide begins, and on every frame he is covered exactly when text is over him;
-    /// once it stops, a covered Topo goes after one quiet frame and ends clear of text.
+    /// pause, no swim begins but the ball's shot at the geometry still to come, and on every frame
+    /// he is covered exactly when text is over him; once it stops, he ends clear of text.
     func testContinuousScrollingBeginsNoGlideUntilItPausesAndLeavesHimClearOfText() {
         // Rows of text, scrolling up past him at 300 points a second, updated at 60 Hz while the
         // clock ticks at 30.
@@ -224,6 +182,8 @@ final class MascotRoamTests: XCTestCase {
         var time = start
         var offset: CGFloat = 0
         var hiddenSeen = false
+        let moves = roam.moves
+        var seen = moves
         for step in 1...(60 * 4) {
             time = start + Double(step) / 60
             offset += 5
@@ -233,18 +193,25 @@ final class MascotRoamTests: XCTestCase {
             assertCoveredExactlyWhenOverlapped(roam, "tick \(time)")
             if roam.covered { hiddenSeen = true }
             XCTAssertNotNil(roam.position)
-            XCTAssertEqual(roam.moves, 0, "a glide began mid-scroll at \(time)")
+            // One shot from the ball, the scroll's, and no other swim while it runs.
+            XCTAssertLessThanOrEqual(roam.moves, moves + 1, "a second swim began mid-scroll at \(time)")
+            if roam.moves > seen {
+                seen = roam.moves
+                XCTAssertEqual(roam.move?.provisional, true, "a swim not from the ball began mid-scroll at \(time)")
+            }
         }
         XCTAssertTrue(hiddenSeen, "the scroll never passed over him, so this held nothing")
         // The scroll stops. A covered Topo waits one quiet frame; a clear one waits the settle.
         let wasHidden = roam.covered
         let stopped = time
+        let shot = roam.moves - moves
         while roam.needsTime, time < stopped + 30 {
             time += Self.frame
             roam.advance(to: time)
             assertCoveredExactlyWhenOverlapped(roam, "after \(time)")
         }
-        if wasHidden { XCTAssertEqual(roam.moves, 1, "a covered Topo did not get out of the way") }
+        // A covered Topo gets out of the way with one swim, after the ball's shot if it took one.
+        if wasHidden { XCTAssertEqual(roam.moves, moves + shot + 1, "a covered Topo did not get out of the way") }
         XCTAssertFalse(roam.covered, "he ended the scroll under text")
     }
 
@@ -692,7 +659,7 @@ final class MascotRoamTests: XCTestCase {
         still.reduceMotion = true
         roam.use(still)
         XCTAssertNil(roam.move)
-        XCTAssertFalse(roam.walking)
+        XCTAssertFalse(roam.swimming)
         XCTAssertEqual(roam.position, glide.to)
         time += 1
         roam.advance(to: time)
@@ -711,7 +678,7 @@ final class MascotRoamTests: XCTestCase {
         while roam.needsTime, time < start + 5 {
             time += Self.frame
             roam.advance(to: time)
-            XCTAssertFalse(roam.walking, "a glide under Reduce Motion")
+            XCTAssertFalse(roam.swimming, "a glide under Reduce Motion")
         }
         XCTAssertEqual(roam.moves, 0)
         XCTAssertNotEqual(roam.picture, picture)
@@ -719,8 +686,8 @@ final class MascotRoamTests: XCTestCase {
     }
 
     /// A chat with nothing that clears him — no gap — has him over the least of its words, drawn;
-    /// and one with room again sends him to it with a glide, at the hurry from its first frame,
-    /// since standing on words he is covered.
+    /// and one with room again sends him to it with a swim, hurried, since standing on words he
+    /// is covered.
     func testWithNoGapHeStandsOverWordsAndRoomIsAGlideOut() throws {
         let (placed, start) = settled(Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)]))
         var roam = placed
@@ -736,13 +703,7 @@ final class MascotRoamTests: XCTestCase {
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
         let move = try XCTUnwrap(roam.move, "no glide out from over the words")
         XCTAssertEqual(roam.moves, 1)
-        let first = try XCTUnwrap(roam.position)
-        time += Self.frame
-        roam.advance(to: time)
-        let second = try XCTUnwrap(roam.position)
-        // The first frame of the glide, covered, is the hurry's: ten frames' worth of the ease.
-        let hurried = move.at(Self.frame * 10)
-        XCTAssertEqual(second.y, hurried.y, accuracy: 0.01, "the glide out from over words did not hurry: \(first) → \(second)")
+        XCTAssertEqual(move.pace, Double(Self.settings.hurry), "the swim out from over words did not hurry")
     }
 
     /// Rows of words the full width of the column, 20 points tall every 30 down to the glass: no
@@ -899,9 +860,11 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertTrue(MascotRoost.admits(narrowed, frame: passing, clearance: 8, reach: Self.reach))
         time += Self.frame
         roam.observe(narrowed, at: time)
+        let next = try XCTUnwrap(roam.move, "the narrowing stopped him where he was passing").to
+        XCTAssertNotEqual(next, move.to)
         while roam.move != nil, time < start + 30 { time += Self.frame; roam.advance(to: time) }
-        let choice = try XCTUnwrap(roam.decision?.choice)
-        XCTAssertEqual(roam.picture, choice.frame, "he stopped where the glide was cut short, \(passing)")
+        XCTAssertEqual(roam.picture?.origin, next, "he stopped where the glide was cut short, \(passing)")
+        XCTAssertTrue(MascotRoost.admits(narrowed, frame: try XCTUnwrap(roam.picture), clearance: 8, reach: Self.reach))
         XCTAssertFalse(roam.hidden)
     }
 
@@ -910,7 +873,7 @@ final class MascotRoamTests: XCTestCase {
     /// it was, decides nothing, and he arrives.
     func testAGlideToAGapTheGlassKeptHisReachAloneForIsNotDecidedAgain() throws {
         let size = MascotSprite.size(scale: 1), reach = MascotSprite.reach(scale: 1)
-        let settings = MascotRoam.Settings(size: size, clearance: 32, reach: reach, speed: 40, settle: 0.6)
+        let settings = MascotRoam.Settings(size: size, clearance: 32, reach: reach, settle: 0.6)
         func field(_ height: CGFloat) -> MascotField {
             MascotField(visible: CGRect(x: 0, y: 0, width: 393, height: 700),
                         obstacles: [CGRect(x: 0, y: 0, width: 150, height: height)],

@@ -42,7 +42,7 @@ final class TopoOnTheGlassTests: XCTestCase {
             let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
             XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(transcript): the chat screen, with its microphone")
             let standing = try waitForTopo(in: app, "\(transcript): standing in the \(roost)") {
-                $0.roost == roost && $0.hidden == (roost == "none") && !$0.walking && $0.frame == $0.to
+                $0.roost == roost && $0.hidden == (roost == "none") && !$0.swimming && $0.frame == $0.to
             }
             assertOffTheGlass(standing, transcript)
             attach(app, "topo-\(transcript)-\(roost)")
@@ -82,7 +82,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
         let resting = mic.frame
         let placed = try waitForTopo(in: app, "standing in a gap of the empty chat") {
-            $0.roost == "gap" && !$0.hidden && !$0.walking && $0.frame == $0.to
+            $0.roost == "gap" && !$0.hidden && !$0.swimming && $0.frame == $0.to
         }
 
         let flank = app.buttons["Type instead"]
@@ -111,7 +111,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         // The keyboard takes the room he stood in, and he is placed in room above it: standing
         // still, in a gap and with nothing over it, the keyboard included.
         let now = try waitForTopo(in: app, "out from under the keyboard") {
-            $0.roost == "gap" && !$0.hidden && !$0.walking && !$0.covered
+            $0.roost == "gap" && !$0.hidden && !$0.swimming && !$0.covered
                 && $0.frame == $0.to && $0.frame != placed.frame
         }
         XCTAssertNotEqual(now.frame, placed.frame, "the keyboard came up over him and he did not move: \(now)")
@@ -146,7 +146,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
         let resting = try waitForTopo(in: app, "settled over the full chat") {
-            $0.roost != "" && !$0.walking && $0.frame == $0.to && $0.pane != nil
+            $0.roost != "" && !$0.swimming && $0.frame == $0.to && $0.pane != nil
         }
         assertOffTheGlass(resting, "before the keyboard")
         let flank = app.buttons["Type instead"]
@@ -172,7 +172,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
         let up = try waitForTopo(in: app, "settled over the short glass") {
             guard let pane = $0.pane else { return false }
-            return !$0.walking && $0.frame == $0.to && pane[3] < restingPane[3] - 1
+            return !$0.swimming && $0.frame == $0.to && pane[3] < restingPane[3] - 1
         }
         assertOffTheGlass(up, "with the keyboard up")
         for glimpse in up.recent { glimpses[glimpse.sequence] = glimpse }
@@ -201,7 +201,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         for (transcript, facing) in [("continuity", "right"), ("empty", "right"), ("left", "left")] {
             let app = launch(look: "{}", transcript: transcript)
             let standing = try waitForTopo(in: app, "\(transcript): standing in a gap") {
-                $0.roost == "gap" && !$0.hidden && !$0.walking && $0.frame == $0.to
+                $0.roost == "gap" && !$0.hidden && !$0.swimming && $0.frame == $0.to
             }
             let frame = try XCTUnwrap(standing.frame)
             let centre = frame[0] + frame[2] / 2, middle = Double(app.frame.width) / 2
@@ -363,7 +363,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         var frame: [Double]?
         var to: [Double]?
         var hidden = true
-        var walking = false
+        var swimming = false
         var covered = false
         var moves = 0
         var pane: [Double]?
@@ -378,7 +378,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
 
         var description: String {
-            "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) covered \(covered) moves \(moves) pane \(pane ?? [])"
+            "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) swimming \(swimming) covered \(covered) moves \(moves) pane \(pane ?? [])"
         }
     }
 

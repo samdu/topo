@@ -33,7 +33,7 @@ final class TuningTests: XCTestCase {
     /// Each slider sets its field, worn over the vault's look, and nothing else moves.
     func testEachKnobSetsItsFieldAndNoOther() throws {
         let values: [Tuning.Knob: Double] = [.clearance: 0, .replyTrailingInset: 60, .personLeadingInset: 140,
-                                             .scale: 1.5, .roamSpeed: 120]
+                                             .scale: 1.5, .stride: 120]
         for (knob, value) in values {
             let tuning = Tuning(defaults: defaults())
             tuning.set(knob, to: value)
@@ -56,7 +56,7 @@ final class TuningTests: XCTestCase {
             }
             for past in [knob.range.lowerBound - 1, knob.range.upperBound + 1] {
                 let tuning = Tuning(defaults: defaults())
-                let other: Tuning.Knob = knob == .roamSpeed ? .clearance : .roamSpeed
+                let other: Tuning.Knob = knob == .stride ? .clearance : .stride
                 tuning.set(other, to: other.range.lowerBound)
                 tuning.set(knob, to: past)
                 let worn = tuning.worn(over: vault)

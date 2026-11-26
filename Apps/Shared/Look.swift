@@ -708,24 +708,28 @@ struct Look: Equatable, Sendable {
         /// picture; not from the transcript's own edges, where what he keeps is his reach
         /// (`MascotSprite.reach`), so the margin beside a reply holds him. A new roost within this of where he stands is not a move.
         var clearance: CGFloat = 8
-        /// How fast he goes from one roost to the next, in points a second on average, eased at
-        /// both ends: a stroll, so as not to call attention to himself.
-        var roamSpeed: CGFloat = 40
-        /// How fast he goes to the model slider when it opens, along it as the model changes and,
-        /// where the look places him, home when it shuts, in points a second: a swim, since he
-        /// was called and is not strolling.
-        var swimSpeed: CGFloat = 240
-        /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
-        /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
-        var hurry: CGFloat = 10
+        /// How far one stroke of his swim carries him at the cruise, in points (`MascotSwim`): a
+        /// stroke takes 1.07 s, so a swim of a screen's height is a handful of snaps, and a short
+        /// one a single one.
+        var stride: CGFloat = 93
+        /// How many times the cruise his strokes come in a hurry, covering the same ground: when
+        /// anything is over him as a swim begins, for the shot he takes before the words stop,
+        /// and for every swim the look places him by.
+        var hurry: CGFloat = 1.7
         /// How long the chat's geometry has to hold still before he picks a new roost, in
         /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
         /// once it settles, not on every frame of it.
         var roamSettle = 0.6
-        /// How long a frame of him is on the screen, in seconds, while he does anything: a
-        /// twenty-fourth, which is the slowest his motion reads as motion. The display gives the
-        /// nearest rate it has in reach of it: a ProMotion screen draws him at 24 exactly, a 60 Hz
-        /// one, which has no 24, at 20.
+        /// How long a frame of him is on the screen while he swims, in seconds: a sixtieth, the
+        /// picture and where it is moved together, since a jet read at 24 is a jump.
+        var swimInterval = 1.0 / 60
+        /// How long a frame lasts while he wears a pose of a turn's (thinking, searching, building,
+        /// writing, calendar), in seconds: a thirtieth.
+        var workInterval = 1.0 / 30
+        /// How long a frame of him is on the screen, in seconds, while he idles: a twenty-fourth,
+        /// which is the slowest his motion reads as motion. The display gives the nearest rate it
+        /// has in reach of it: a ProMotion screen draws him at 24 exactly, a 60 Hz one, which has
+        /// no 24, at 20.
         var frameInterval = 1.0 / 24
         /// How long a frame lasts once he has rested, in seconds: a twelfth, half the frames of
         /// `frameInterval`, for the idle cycle of a Topo with nothing to do, his breathing, his
@@ -733,8 +737,8 @@ struct Look: Equatable, Sendable {
         /// faster than work.
         var restInterval = 1.0 / 12
         /// How long he has to have been at rest — idle, standing still, no finger on him —
-        /// before his frames come at `restInterval`, in seconds. Anything he does brings
-        /// `frameInterval` back on the frame it is seen.
+        /// before his frames come at `restInterval`, in seconds. Anything he does brings its own
+        /// rate back on the frame it is seen.
         var restAfter = 4.0
         /// Where he sits, as a policy: roaming the gaps the words leave, on the composer's glass,
         /// or pinned at `pin`. A drag on him writes `pinned` and the pin to this device's override

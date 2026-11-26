@@ -24,7 +24,7 @@ final class MascotPlacementTests: XCTestCase {
 
     static func settings(_ placement: Look.Mascot.Placement, pin: CGPoint = Look.Mascot().pin,
                          reduceMotion: Bool = false) -> MascotRoam.Settings {
-        MascotRoam.Settings(size: size, clearance: 8, reach: reach, speed: 40, hurry: 10, settle: 0.6,
+        MascotRoam.Settings(size: size, clearance: 8, reach: reach, settle: 0.6,
                             reduceMotion: reduceMotion, placement: placement, pin: pin)
     }
 
@@ -101,7 +101,7 @@ final class MascotPlacementTests: XCTestCase {
             let pane = try XCTUnwrap(field.pane), well = try XCTUnwrap(field.well)
             XCTAssertEqual(roam.roost.name, "glass", label)
             XCTAssertEqual(roam.moves, moves, "\(label): he glided rather than riding the pane")
-            XCTAssertFalse(roam.walking, label)
+            XCTAssertFalse(roam.swimming, label)
             XCTAssertEqual(box.minY + (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * Self.scale, pane.minY,
                            accuracy: 0.001, "\(label): his shelf is not the pane's top edge")
             let axis = max(pane.minX + Look.Composer().perchInset, field.visible.minX + Self.reach.left + Self.size.width / 2)
@@ -257,10 +257,10 @@ final class MascotPlacementTests: XCTestCase {
         }
     }
 
-    /// The keyboard coming up over a pinned Topo lifts him clear of it at the hurry, keeping his
-    /// clearance or his reach from its top edge; the pin he goes back to is the keyboard-down
-    /// frame's and is never rewritten; the keyboard going sends him back to it at the stroll,
-    /// to the very frame he stood in.
+    /// The keyboard coming up over a pinned Topo lifts him clear of it in a hurried swim, keeping
+    /// his clearance or his reach from its top edge; the pin he goes back to is the keyboard-down
+    /// frame's and is never rewritten; the keyboard going sends him back to it in another, to the
+    /// very frame he stood in.
     func testTheKeyboardLiftsAPinnedTopoAndHeGoesBackToThePin() throws {
         let pin = CGPoint(x: 0.8, y: 0.85)
         var time = 0.0
@@ -271,7 +271,7 @@ final class MascotPlacementTests: XCTestCase {
         let up = Self.field(keyboard: true)
         roam.observe(up, at: time)
         let lift = try XCTUnwrap(roam.move, "the keyboard came up over him and he did not go")
-        XCTAssertEqual(lift.pace, 10, "not at the hurry")
+        XCTAssertEqual(lift.pace, Double(Look.Mascot().hurry), "not in a hurry")
         XCTAssertEqual(roam.moves, 1)
         run(&roam, time: &time)
         let lifted = try XCTUnwrap(roam.picture)
@@ -283,7 +283,7 @@ final class MascotPlacementTests: XCTestCase {
 
         roam.observe(Self.field(), at: time)
         let back = try XCTUnwrap(roam.move, "the keyboard went and he stayed lifted")
-        XCTAssertEqual(back.pace, 1, "not at the stroll")
+        XCTAssertEqual(back.pace, Double(Look.Mascot().hurry), "not in a hurry")
         run(&roam, time: &time)
         XCTAssertEqual(roam.picture, home, "not back at the pin")
         XCTAssertEqual(roam.settings.pin, pin)
@@ -312,10 +312,10 @@ final class MascotPlacementTests: XCTestCase {
 
     // MARK: Between policies
 
-    /// A change of policy is one glide from where he is to where the new one puts him, at the
-    /// stroll, as a roost change is: roaming to the glass, the glass to a pin, and the pin back to
+    /// A change of policy is one hurried swim from where he is to where the new one puts him, as
+    /// a roost change is: roaming to the glass, the glass to a pin, and the pin back to
     /// roaming, which decides a roost from where he stands — the nearest gap to him.
-    func testAChangeOfPolicyIsAGlideAtTheStroll() throws {
+    func testAChangeOfPolicyIsAHurriedSwim() throws {
         var time = 0.0
         let field = Self.field()
         var roam = settled(Self.settings(.roam), [field], time: &time)
@@ -326,8 +326,7 @@ final class MascotPlacementTests: XCTestCase {
             roam.use(Self.settings(placement, pin: CGPoint(x: 0.2, y: 0.3)))
             let glide = try XCTUnwrap(roam.move, "\(name): placed rather than glided")
             XCTAssertEqual(glide.from, from, name)
-            XCTAssertEqual(glide.pace, 1, name)
-            XCTAssertEqual(glide.duration, Double(hypot(glide.to.x - from.x, glide.to.y - from.y) / 40), accuracy: 1e-9, name)
+            XCTAssertEqual(glide.pace, Double(Look.Mascot().hurry), name)
             XCTAssertEqual(roam.moves, moves + 1, name)
             XCTAssertEqual(roam.roost.name, name)
             run(&roam, time: &time)

@@ -176,7 +176,7 @@ final class MascotDriverTests: XCTestCase {
                                   pane: CGRect(x: 40, y: 600, width: 320, height: 80),
                                   well: CGRect(x: 164, y: 604, width: 72, height: 72))
     static let settings = MascotRoam.Settings(size: MascotSprite.size(scale: 2.0 / 3), clearance: 8,
-                                              reach: MascotSprite.reach(scale: 2.0 / 3), speed: 40,
+                                              reach: MascotSprite.reach(scale: 2.0 / 3),
                                               settle: 0.6)
 
     /// The canvas's display link runs while he animates, at the look's rate, and is gone the
@@ -282,7 +282,8 @@ final class MascotDriverTests: XCTestCase {
         var settings = Self.settings
         settings.hurry = 1
         func apply(_ field: MascotField) {
-            canvas.apply(input: input, field: field, settings: settings, interval: 1, conditions: seen)
+            canvas.apply(input: input, field: field, settings: settings, interval: 1, swimInterval: 1, workInterval: 1,
+                         conditions: seen)
         }
         // Room at the bottom right only: he settles there.
         var low = Self.open
@@ -353,7 +354,7 @@ final class MascotDriverTests: XCTestCase {
 
     /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
     /// for, so a thinking guest goes on thinking rather than being put back to idle.
-    func testTheWalkIsWornOnlyWhileHeGlidesAndHisActivitySurvivesIt() throws {
+    func testTheStrokeIsWornOnlyWhileHeSwimsAndHisActivitySurvivesIt() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
@@ -367,21 +368,23 @@ final class MascotDriverTests: XCTestCase {
         for _ in 0..<30 { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.driver.input.activity, "thinking")
         let before = try XCTUnwrap(canvas.roam?.position)
-        // A turn lands where he stands: he goes, walking.
+        // A turn lands where he stands: he goes, swimming.
         var landed = Self.open
         landed.obstacles = [CGRect(x: 0, y: before.y - 20, width: 400, height: 600 - before.y + 20)]
         apply(landed)
-        var walked = false
+        var swam = false
+        var worn: Set<String> = []
         for _ in 0..<(30 * 30) {
             canvas.step(1.0 / 30)
-            if canvas.roam?.walking == true {
-                walked = true
-                XCTAssertEqual(canvas.driver.input.activity, "walk")
+            if canvas.roam?.swimming == true {
+                swam = true
+                worn.insert(canvas.driver.input.activity ?? "")
             }
-            if walked, canvas.roam?.walking == false { break }
+            if swam, canvas.roam?.swimming == false { break }
         }
-        XCTAssertTrue(walked, "he never glided")
-        XCTAssertEqual(canvas.driver.input.activity, "thinking", "the glide put him back to something else")
+        XCTAssertTrue(swam, "he never swam")
+        XCTAssertEqual(worn, ["swimOpen", "swimThrust", "swimTrail"], "not the stroke's poses while he swam")
+        XCTAssertEqual(canvas.driver.input.activity, "thinking", "the swim put him back to something else")
         XCTAssertEqual(canvas.driver.input.corner, 0, "the engine's own stroll is not his to take")
     }
 

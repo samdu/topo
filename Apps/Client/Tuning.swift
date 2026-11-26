@@ -30,14 +30,14 @@ final class Tuning {
     /// One slider: which field of the look it sets, the range it slides in (the range
     /// `LookDocument` reads that field in), the step, and the unit its value is labelled in.
     enum Knob: String, CaseIterable, Identifiable {
-        case clearance, replyTrailingInset, personLeadingInset, scale, roamSpeed
+        case clearance, replyTrailingInset, personLeadingInset, scale, stride
 
         var id: String { rawValue }
 
         /// The part of the look the field is in, as the document names it.
         var part: String {
             switch self {
-            case .clearance, .scale, .roamSpeed: "mascot"
+            case .clearance, .scale, .stride: "mascot"
             case .replyTrailingInset, .personLeadingInset: "transcript"
             }
         }
@@ -47,7 +47,7 @@ final class Tuning {
             case .clearance: 0...64
             case .replyTrailingInset, .personLeadingInset: 0...200
             case .scale: 0.25...4
-            case .roamSpeed: 10...400
+            case .stride: 30...200
             }
         }
 
@@ -59,15 +59,14 @@ final class Tuning {
             case .replyTrailingInset: "Reply inset"
             case .personLeadingInset: "Your inset"
             case .scale: "Topo's scale"
-            case .roamSpeed: "Topo's speed"
+            case .stride: "Topo's stroke"
             }
         }
 
-        /// The value with its unit: points, points to an art pixel, points a second.
+        /// The value with its unit: points, or points to an art pixel.
         func label(_ value: Double) -> String {
             switch self {
             case .scale: String(format: "%.2f pt/px", value)
-            case .roamSpeed: String(format: "%.0f pt/s", value)
             default: String(format: "%.0f pt", value)
             }
         }
@@ -79,7 +78,7 @@ final class Tuning {
             case .replyTrailingInset: Double(look.transcript.replyTrailingInset)
             case .personLeadingInset: Double(look.transcript.personLeadingInset)
             case .scale: Double(look.mascot.scale)
-            case .roamSpeed: Double(look.mascot.roamSpeed)
+            case .stride: Double(look.mascot.stride)
             }
         }
     }
