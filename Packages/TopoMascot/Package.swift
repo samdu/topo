@@ -2,9 +2,9 @@
 import PackageDescription
 
 // Topo the octopus, drawn in pixels from the agent's state: the model picks his head, the
-// context's fill his colour and face, the tool in use his pose. The engine is Sam's own, from
-// samdu/experiments `topo-mascot-swift` at 0a7718e (the Swift port of `topo-mascot-engine`'s
-// JavaScript at 240fda1), copied here unchanged with its idle-cycle and facing tests (RestTests.swift,
+// context's fill his colour and face, the tool in use his pose, the swim his travel. The engine is Sam's own, from
+// samdu/experiments `topo-mascot-swift` at f7b1742 (the Swift port of `topo-mascot-engine`'s
+// JavaScript at c0852f3), copied here unchanged with its idle-cycle and facing tests (RestTests.swift,
 // FacingTests.swift); the suite holds it to golden frames that JavaScript rendered
 // (Tests/TopoMascotTests/golden.json, made by that experiment's `oracle/golden.mjs`). Foundation
 // only; the iOS app draws him on the composer's glass.

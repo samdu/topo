@@ -16,10 +16,14 @@ public struct TopoInput: Codable, Sendable {
     public var model: String?, tokens: Double?, level: Double?, load: String?
     public var activity: String?, sign: String?, corner: Double?, facing: String?
     public var style: String?, shading: String?, relief: Double?
+    /// Which way the swim's arms stream, in degrees in his own picture as drawn facing left: 0 right, 90 down.
+    public var trail: Double?
     public init(model: String? = nil, tokens: Double? = nil, level: Double? = nil, load: String? = nil, activity: String? = nil,
-                sign: String? = nil, corner: Double? = nil, facing: String? = nil, style: String? = nil, shading: String? = nil, relief: Double? = nil) {
+                sign: String? = nil, corner: Double? = nil, facing: String? = nil, style: String? = nil, shading: String? = nil, relief: Double? = nil,
+                trail: Double? = nil) {
         self.model = model; self.tokens = tokens; self.level = level; self.load = load; self.activity = activity
         self.sign = sign; self.corner = corner; self.facing = facing; self.style = style; self.shading = shading; self.relief = relief
+        self.trail = trail
     }
 }
 
@@ -28,6 +32,8 @@ public struct TopoState: Sendable {
     public var corner = -40.0, sign = "updating memory", relief: Double? = nil
     /// The side of the screen he stands on, "left" or "right"; anything else is "left".
     public var facing = "left"
+    /// Which way the swim's arms stream (`TopoInput.trail`).
+    public var trail = 90.0
 }
 
 public final class Topo {
@@ -105,6 +111,7 @@ public final class Topo {
         if let v = next.style { state.style = v }
         if let v = next.shading { state.shading = v }
         if let v = next.relief { state.relief = v }
+        if let v = next.trail { state.trail = v }
         if let m = next.model, !m.isEmpty { state.level = levelForModel(m) }
         if let tk = next.tokens { state.load = loadForTokens(tk) }
         t += dt
@@ -141,6 +148,7 @@ public final class Topo {
         let work = POSES[state.activity] != nil && !CYCLE_ONLY.contains(state.activity) ? state.activity : "shelf"
         let want = abs(goal - x_) > 0.5 ? "walk" : idle ? outing_ ?? "shelf" : work
         if want != poseKey { poseKey = want; pose = POSES[want]!; targets = pose.params; since = 0 }
+        if pose.aim { targets = aimed(pose, trail: state.trail, mirrored: mirrored).params }
         since += dt
         let poseLift = pose.lift ?? 0
         lift += ((poseLift + (poseLift != 0 ? sin(t * 1.1) : 0)) * S - lift) * (1 - exp(-dt * 5))
