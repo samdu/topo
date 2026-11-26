@@ -826,6 +826,15 @@ final class ConnectionsScreenshots: XCTestCase {
                     return abs(last.minY - top) <= 2 && abs(last.midX - window.bounds.midX) <= 12
                 }
             } catch let missed as Missed {
+                if let window = above() {
+                    for name in ["missed-1", "missed-2"] {
+                        let attachment = XCTAttachment(image: try drawing(window).image)
+                        attachment.name = "\(missed.what) \(name)"
+                        attachment.lifetime = .keepAlways
+                        add(attachment)
+                        try await Task.sleep(for: .seconds(1))
+                    }
+                }
                 XCTFail("\(missed.what): drawn at \(last)")
                 throw missed
             }
