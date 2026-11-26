@@ -312,9 +312,8 @@ enum LookDocument {
         r.colour("signInk", &value.signInk)
         r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
         r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
-        // Over GitHub's page Topo and his sign cover what is under them, so they are no larger
-        // than on the Connections page and no wider than the narrowest phone (184 × 1.7 < 320
-        // points). The board stands under the browser's bar, which on an iPhone ends some 80
+        // Over GitHub's page Topo and his sign cover what is under them, so they are no wider
+        // than the narrowest phone (184 × 1.7 < 320 points). The board stands under the browser's bar, which on an iPhone ends some 80
         // points under the safe area's top with the browser over Settings and Connections, so the
         // bar's close button is never under it.
         r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...1.7)

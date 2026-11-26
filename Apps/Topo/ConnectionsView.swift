@@ -222,15 +222,9 @@ struct GitHubCodeSign: View {
         state.sign = words
         state.turnOpen = false
         state.activity = .idle
-        guard let still = WidgetMascotView.still(state.input, steps: settleSteps), still.height >= Topo.height else { return 0 }
-        let perArt = still.height / Topo.height
-        let row = (0..<still.height).first { row in
-            (0..<still.width).contains {
-                SignSeen.drawn(still, at: CGPoint(x: (CGFloat($0) + 0.5) / CGFloat(still.width),
-                                                  y: (CGFloat(row) + 0.5) / CGFloat(still.height)))
-            }
-        }
-        return (row ?? 0) / perArt
+        guard let still = WidgetMascotView.still(state.input, steps: settleSteps), still.height >= Topo.height,
+              let row = SignSeen.firstDrawnRow(still) else { return 0 }
+        return row / (still.height / Topo.height)
     }
     /// What the board says for a while after a copy.
     static let copiedWords = "Copied"
@@ -276,7 +270,8 @@ struct GitHubCodeSign: View {
             .accessibilityLabel("GitHub code \(code)")
             .accessibilityHint(hint)
             .accessibilityIdentifier(identifier)
-            .sensoryFeedback(.success, trigger: copies) { _, _ in raised }
+            // Under GitHub's page the sign at the foot says nothing: the one over it does.
+            .sensoryFeedback(.success, trigger: copies) { _, _ in raised && !covered }
             if raised && !overPage {
                 Text("Tap the sign to copy the code")
                     .foregroundStyle(look.settings.signInk)
@@ -295,7 +290,10 @@ struct GitHubCodeSign: View {
         .onChange(of: Said(raised: raised, copies: copies)) { _, now in
             if now.raised { sayCopied() }
         }
-        .onDisappear { saying?.cancel() }
+        .onDisappear {
+            saying?.cancel()
+            sayingCopied = false
+        }
     }
 
     /// The board says Copied for the look's pause, then the code again; a copy meanwhile starts
@@ -396,6 +394,9 @@ struct GitHubSignOverPage: View {
     /// Points below his place he is drawn at; nil before his swim has begun, which is the foot.
     private(set) var below: CGFloat?
     @ObservationIgnored private var swimming: Task<Void, Never>?
+    /// Every leave, counted, so a swim's clock that wakes after one arrives nowhere: a cancel
+    /// that lands between the sleep's end and the task's next step would not stop it.
+    @ObservationIgnored private var leaves = 0
 
     /// Swims him up from `foot` points below his place over `seconds`, SwiftUI's animation and
     /// so drawn at the display's rate, and has him arrive when its time is up, by the clock; with
@@ -409,14 +410,17 @@ struct GitHubSignOverPage: View {
             return
         }
         withAnimation(.easeInOut(duration: seconds)) { below = 0 }
+        let leaves = leaves
         swimming = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(Int(seconds * 1000))) } catch { return }
-            self?.arrived = true
+            guard let self, self.leaves == leaves else { return }
+            self.arrived = true
         }
     }
 
     /// The page has gone: the next one he swims up over again.
     func leave() {
+        leaves += 1
         swimming?.cancel()
         swimming = nil
         arrived = false
@@ -426,6 +430,21 @@ struct GitHubSignOverPage: View {
     func takes(_ point: CGPoint) -> Bool {
         guard arrived, frame.contains(point), frame.width > 0, frame.height > 0, let image else { return false }
         return Self.drawn(image, at: CGPoint(x: (point.x - frame.minX) / frame.width, y: (point.y - frame.minY) / frame.height))
+    }
+
+    /// The first row of `image` from the top with anything drawn in it, read in one pass.
+    static func firstDrawnRow(_ image: CGImage) -> Int? {
+        let width = image.width, height = image.height
+        var pixels = [UInt32](repeating: 0, count: width * height)
+        let read = pixels.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard read else { return nil }
+        return (0..<height).first { row in pixels[(row * width)..<((row + 1) * width)].contains { $0 >> 24 != 0 } }
     }
 
     /// Whether anything is drawn in `image` at `unit`, a point of its unit square from the top left.

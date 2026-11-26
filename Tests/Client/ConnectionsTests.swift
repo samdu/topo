@@ -329,17 +329,40 @@ final class ConnectionsTests: XCTestCase {
                                               space: CGColorSpaceCreateDeviceRGB(),
                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(UIColor.red.cgColor)
-        // The left half drawn, every row of it.
-        context.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+        // The top left quarter drawn (CoreGraphics' origin is the bottom), so a touch read
+        // upside down or mirrored lands on nothing.
+        context.fill(CGRect(x: 0, y: 5, width: 10, height: 5))
         let seen = SignSeen()
         seen.image = try XCTUnwrap(context.makeImage())
         seen.frame = CGRect(x: 100, y: 200, width: 40, height: 20)
         XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 210)), "a touch was his before he was in his place")
         seen.swim(from: 0, seconds: nil)
-        XCTAssertTrue(seen.takes(CGPoint(x: 110, y: 210)), "a touch on him was the page's")
-        XCTAssertFalse(seen.takes(CGPoint(x: 130, y: 210)), "a touch on nothing drawn in his frame was his")
+        XCTAssertTrue(seen.takes(CGPoint(x: 110, y: 205)), "a touch on him was the page's")
+        XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 215)), "a touch under what is drawn in his frame was his")
+        XCTAssertFalse(seen.takes(CGPoint(x: 130, y: 205)), "a touch beside what is drawn in his frame was his")
         XCTAssertFalse(seen.takes(CGPoint(x: 90, y: 210)), "a touch outside his frame was his")
         XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 230)), "a touch below his frame was his")
+
+        // The page going takes him out of his place, and the next page's swim starts again.
+        seen.leave()
+        XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 205)), "a touch was his after the page went")
+        XCTAssertNil(seen.below)
+        seen.swim(from: 300, seconds: 60)
+        XCTAssertEqual(seen.below, 0)
+        XCTAssertFalse(seen.arrived, "he arrived before his swim was over")
+    }
+
+    /// A swim's clock that wakes after the page went arrives nowhere, however close the two.
+    func testASwimEndedByALeaveNeverArrives() async throws {
+        let seen = SignSeen()
+        for _ in 0..<50 {
+            seen.swim(from: 300, seconds: 0.005)
+            try await Task.sleep(for: .milliseconds(5))
+            seen.leave()
+            XCTAssertFalse(seen.arrived, "he arrived after the page went")
+            try await Task.sleep(for: .milliseconds(10))
+            XCTAssertFalse(seen.arrived, "a swim's clock arrived him after the page went")
+        }
     }
 
     /// The sign over the page is read within its bounds and no further: at each end a value is
@@ -871,12 +894,13 @@ final class ConnectionsScreenshots: XCTestCase {
         // A touch on him is his window's; one in his window on nothing drawn, beside him or
         // below him, is the page's.
         let cgImage = try XCTUnwrap(image.cgImage)
-        let onHim = try XCTUnwrap(stride(from: box.minY, to: box.maxY, by: 1).lazy.compactMap { y -> CGPoint? in
+        let onHim = try XCTUnwrap(stride(from: box.midY, to: box.maxY, by: 1).lazy.compactMap { y -> CGPoint? in
             let point = CGPoint(x: box.midX, y: y + 0.5)
             return SignSeen.drawn(cgImage, at: CGPoint(x: point.x / window.bounds.width, y: point.y / window.bounds.height)) ? point : nil
         }.first, "nothing of him is drawn down his middle")
         XCTAssertTrue(over(onHim) === window, "a touch on him reaches \(String(describing: over(onHim)))")
-        for (name, point) in [("beside him", CGPoint(x: window.bounds.minX + 8, y: box.midY)),
+        for (name, point) in [("in his frame above his sign", CGPoint(x: box.midX, y: box.minY - 30)),
+                              ("beside him", CGPoint(x: window.bounds.minX + 8, y: box.midY)),
                               ("below him", CGPoint(x: box.midX, y: box.maxY + 40))] {
             XCTAssertNil(over(point), "a touch \(name) is taken over the page")
             let hit = app.hitTest(app.convert(point, from: nil), with: nil)

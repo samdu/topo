@@ -242,7 +242,7 @@ final class Connections {
     private(set) var copies = 0
 
     /// The code shown, copied to the pasteboard at once, then GitHub's page for it opened in the
-    /// in-app browser `after` the confirmation the screen draws. The page opens only if this
+    /// in-app browser `after` the time the sign says Copied for. The page opens only if this
     /// connect is still waiting on that same code when the confirmation ends: a Cancel, a second
     /// Connect, a sign-out or the flow ending meanwhile opens nothing. A second call, the person
     /// having closed the sheet, copies and opens again.
