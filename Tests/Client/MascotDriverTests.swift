@@ -365,14 +365,18 @@ final class MascotDriverTests: XCTestCase {
             canvas.apply(input: thinking, field: field, settings: Self.settings, interval: 1.0 / 30,
                          conditions: seen)
         }
-        apply(Self.open)
-        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        // He stands high, above a turn that fills the foot of the screen.
+        var high = Self.open
+        high.obstacles = [CGRect(x: 0, y: 250, width: 400, height: 350)]
+        apply(high)
+        for _ in 0..<(30 * 30) where canvas.roam?.needsTime == true { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.driver.input.activity, "thinking")
-        let before = try XCTUnwrap(canvas.roam?.position)
-        // A turn lands over him and everything to his right: he goes, swimming to the left, so
-        // his head leads round and he has to right himself after.
+        let before = try XCTUnwrap(canvas.roam?.picture)
+        // A turn lands over him and everything above him, and the foot is clear: he swims straight
+        // down the screen, his lean held at its limit, so he arrives with his arms off straight
+        // behind him and comes in as he rights himself.
         var landed = Self.open
-        landed.obstacles = [CGRect(x: before.x - 20, y: 0, width: 400, height: 700)]
+        landed.obstacles = [CGRect(x: 0, y: 0, width: 400, height: before.maxY + 20)]
         apply(landed)
         var swam = false
         var worn: Set<String> = []
@@ -391,6 +395,7 @@ final class MascotDriverTests: XCTestCase {
             canvas.driver.input.trail.map { abs(atan2(sin(($0 - MascotLean.behind) * .pi / 180), cos(($0 - MascotLean.behind) * .pi / 180))) * 180 / .pi }
         }
         var off = behind()
+        XCTAssertGreaterThan(off ?? 0, 20, "he arrived with his arms straight behind him, so their coming in is not seen")
         while canvas.lean.angle != 0, righting < 120 {
             XCTAssertEqual(canvas.driver.input.activity, "swimTrail", "a pose other than the glide drawn turned")
             canvas.step(1.0 / 30)

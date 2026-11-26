@@ -688,8 +688,15 @@ final class MascotGeometryTests: XCTestCase {
                     var swim = MascotSwim(from: .zero, to: CGPoint(x: heading.dx, y: heading.dy), stride: 93, pace: 1.7,
                                           scrunched: scrunched)
                     let kickAt = swim.elapsed + swim.duration / 2
-                    var kicked = false
+                    // Without the ball, bent inside its scrunch a quarter turn round.
+                    let bendAt = scrunched ? -1 : 0.5 * MascotSwim.open / swim.pace
+                    var kicked = false, bent = false
                     while !swim.done {
+                        if !bent, bendAt >= 0, swim.elapsed >= bendAt {
+                            bent = true
+                            let here = swim.point, turn = angle + .pi / 2
+                            swim.bend(from: here, to: CGPoint(x: here.x + 300 * cos(turn), y: here.y + 300 * sin(turn)))
+                        }
                         if !kicked, swim.elapsed >= kickAt {
                             kicked = true
                             let here = swim.point, turn = angle + 2 * .pi / 3

@@ -110,9 +110,9 @@ struct MascotSwim: Equatable, Sendable {
     var phase: Phase { at(elapsed).phase }
 
     /// Whether his head leads yet: not through the scrunch a swim starts at, which he balls up into
-    /// upright as he does from a standstill, and from the shot on. A swim that starts at the shot
-    /// leads from its first frame.
-    var leads: Bool { start > 0 || elapsed >= Self.open / pace }
+    /// upright as he does from a standstill, and from the shot on, bent or not. A swim that starts
+    /// at the shot starts past its scrunch, so leads from its first frame.
+    var leads: Bool { elapsed >= Self.open / pace }
 
     /// The way he goes, as a vector, which his head leads along.
     var heading: CGVector { CGVector(dx: to.x - from.x, dy: to.y - from.y) }
@@ -149,8 +149,8 @@ struct MascotSwim: Equatable, Sendable {
 }
 
 /// Which way his picture is turned: his head leads where he swims. It turns toward the way he
-/// goes quickly, while he is a ball, so no aiming is seen, and back upright more slowly once he
-/// has arrived; the short way round, in radians, clockwise on the screen, 0 upright. It turns no
+/// goes quickly, from the shot on (`MascotSwim.leads`), and back upright more slowly once he has
+/// arrived; the short way round, in radians, clockwise on the screen, 0 upright. It turns no
 /// further than `most` either way, so on a swim down the screen he goes three-quarters over
 /// rather than head down: head down his crown would fall 9 pixels past his reach's foot, at
 /// `most` it falls 2 (`MascotSprite.reach`).

@@ -91,6 +91,24 @@ final class MascotSwimTests: XCTestCase {
         }
     }
 
+    /// His head leads from the shot, not through the scrunch a swim starts at, and a bend inside
+    /// that scrunch does not make it lead; a swim from the ball leads from its first frame.
+    func testHisHeadLeadsFromTheShot() {
+        for pace in [1.0, 1.7] {
+            var swim = MascotSwim(from: .zero, to: CGPoint(x: 300, y: 0), stride: 93, pace: pace)
+            XCTAssertFalse(swim.leads, "pace \(pace): leading at the start of the scrunch")
+            swim.elapsed = 0.1 / pace
+            swim.bend(from: swim.point, to: CGPoint(x: 0, y: 300))
+            XCTAssertFalse(swim.leads, "pace \(pace): a bend in the scrunch made him lead")
+            swim.elapsed = MascotSwim.open / pace - 1e-6
+            XCTAssertFalse(swim.leads, "pace \(pace): leading before the shot")
+            swim.elapsed = MascotSwim.open / pace
+            XCTAssertTrue(swim.leads, "pace \(pace): not leading at the shot")
+            XCTAssertTrue(MascotSwim(from: .zero, to: CGPoint(x: 300, y: 0), stride: 93, pace: pace, scrunched: true).leads,
+                          "pace \(pace): a swim from the ball not leading from its first frame")
+        }
+    }
+
     /// His head leads: the lean closes on the way he goes, the short way round, at 16 a second, and
     /// back upright at 9 once he has none; his arms trail the other way in his own picture.
     func testTheHeadLeadsAndHeRightsHimself() {
