@@ -30,6 +30,8 @@ struct MascotSwim: Equatable, Sendable {
 
     var from: CGPoint
     var to: CGPoint
+    /// The points one stroke carries him at the cruise, which a swim bent in its coast is planned at.
+    var stride: CGFloat
     var strokes: Int
     /// What each stroke carries, as a share of the whole way.
     var shares: [Double]
@@ -45,6 +47,7 @@ struct MascotSwim: Equatable, Sendable {
     init(from: CGPoint, to: CGPoint, stride: CGFloat, pace: Double = 1, scrunched: Bool = false) {
         self.from = from
         self.to = to
+        self.stride = stride
         let distance = Double(hypot(to.x - from.x, to.y - from.y))
         let strokes = max(1, Int((distance / Double(max(stride, 1))).rounded(.toNearestOrAwayFromZero)))
         self.strokes = strokes
@@ -62,12 +65,31 @@ struct MascotSwim: Equatable, Sendable {
     var duration: Double { Double(strokes) * strokeLength + Self.coast / pace }
     var done: Bool { elapsed >= duration }
 
-    /// How far along the way from `from` to `to` he is `elapsed` seconds into the swim, 0 to 1.
-    func fraction(at elapsed: Double) -> Double {
+    /// How far through the strokes' whole way he is `elapsed` seconds into the swim, 0 to 1, as the
+    /// strokes carry him, before any of it was spent before the swim began.
+    func carried(at elapsed: Double) -> Double {
         let k = min(Double(strokes), max(elapsed, 0) / strokeLength)
         let i = min(strokes - 1, Int(k.rounded(.down)))
-        let f = k >= Double(strokes) ? 1 : shares[..<i].reduce(0, +) + shares[i] * Self.profile(k - Double(i))
-        return (f - start) / (1 - start)
+        return k >= Double(strokes) ? 1 : shares[..<i].reduce(0, +) + shares[i] * Self.profile(k - Double(i))
+    }
+
+    /// How far along the way from `from` to `to` he is `elapsed` seconds into the swim, 0 to 1.
+    func fraction(at elapsed: Double) -> Double {
+        (carried(at: elapsed) - start) / (1 - start)
+    }
+
+    /// The same swim from `here`, where he is drawn, to `to`: what is left of its strokes carries
+    /// him the rest of the way, so every point it passes is between the two and he moves nowhere
+    /// at the bend. In the coast, with no stroke left, it is a stroke from the shot.
+    mutating func bend(from here: CGPoint, to: CGPoint) {
+        let raw = carried(at: elapsed)
+        guard raw < 1 - 1e-6 else {
+            self = MascotSwim(from: here, to: to, stride: stride, pace: pace, scrunched: true)
+            return
+        }
+        start = raw
+        from = here
+        self.to = to
     }
 
     /// Where he is and which pose the stroke is in, `elapsed` seconds into the swim.
@@ -133,12 +155,13 @@ struct MascotLean: Equatable, Sendable {
 
     private(set) var angle = 0.0
 
-    /// `dt` seconds on, swimming along `heading`, or with none, righting himself.
+    /// `dt` seconds on, swimming along `heading`, or with none, righting himself. A way further
+    /// over than `most` is aimed at `most` on the side he already leans to, and every turn is
+    /// within `most` either side, so none goes the long way round through head down.
     mutating func step(_ dt: Double, heading: CGVector?) {
-        let want = heading.map { atan2(Double($0.dx), -Double($0.dy)) } ?? 0
-        var turn = want - angle
-        turn = atan2(sin(turn), cos(turn))
-        angle += turn * min(1, max(dt, 0) * (heading == nil ? Self.upright : Self.toward))
+        var want = heading.map { atan2(Double($0.dx), -Double($0.dy)) } ?? 0
+        if abs(want) > Self.most { want = (angle == 0 ? (want < 0 ? -1 : 1) : (angle < 0 ? -1 : 1)) * Self.most }
+        angle += (want - angle) * min(1, max(dt, 0) * (heading == nil ? Self.upright : Self.toward))
         angle = min(max(angle, -Self.most), Self.most)
         if heading == nil, abs(angle) < 0.002 { angle = 0 }
     }

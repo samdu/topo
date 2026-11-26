@@ -639,10 +639,14 @@ final class MascotGeometryTests: XCTestCase {
             var frames = 0
             let dt = 1.0 / 60
             var lean = MascotLean()
-            func frame(_ activity: String, course: CGVector?) {
+            var lastTrail: Double?
+            func frame(_ activity: String, course: CGVector?, righting: Bool = false) {
                 lean.step(dt, heading: course)
+                if righting, let t = lastTrail { lastTrail = t + (90 - t) * min(1, dt * MascotLean.upright) }
+                let trail = course.map { lean.trail($0) } ?? (righting ? lastTrail : nil)
+                if course != nil { lastTrail = trail }
                 engine.update(dt, TopoInput(tokens: run.tokens, level: run.level, activity: activity, corner: 0,
-                                            facing: run.facing.rawValue, trail: course.map { lean.trail($0) }))
+                                            facing: run.facing.rawValue, trail: trail))
                 engine.draw(&rgba)
                 frames += 1
                 let c = cos(lean.angle), s = sin(lean.angle)
@@ -668,7 +672,7 @@ final class MascotGeometryTests: XCTestCase {
                     }
                 }
             }
-            for from in ["idle", "writing"] {
+            for from in ["idle", "writing", "building", "searching", "thinking", "calendar"] {
                 for way in 0..<8 {
                     let angle = Double(way) * .pi / 4
                     let heading = CGVector(dx: 300 * cos(angle), dy: 300 * sin(angle))
@@ -691,7 +695,16 @@ final class MascotGeometryTests: XCTestCase {
                         frame(swim.phase.rawValue, course: swim.heading)
                         swim.elapsed += dt
                     }
-                    // Arrived, back in the pose he swam from as the lean rights itself.
+                    // Arrived, he rights himself in the glide, his arms coming in to straight behind
+                    // him, as the canvas has him (`MascotCanvas.sync`, `step`), and is upright
+                    // before the pose he swam from.
+                    var righting = 0
+                    while lean.angle != 0 {
+                        frame(MascotSwim.Phase.trail.rawValue, course: nil, righting: true)
+                        righting += 1
+                        XCTAssertLessThan(righting, 120, "\(run.label): never upright")
+                        if righting >= 120 { break }
+                    }
                     for _ in 0..<60 { frame(from, course: nil) }
                 }
             }

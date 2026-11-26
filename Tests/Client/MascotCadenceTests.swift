@@ -210,8 +210,14 @@ final class MascotCadenceTests: XCTestCase {
         var time = 0.0
         while fresh.roam?.swimming == true, time < 10 { time += fresh.cadence; fresh.step(fresh.cadence) }
         XCTAssertEqual(fresh.roam?.swimming, false, "the swim never ended")
+        // Righting himself after it is the swim's rate too, and upright he is back at the look's.
+        while fresh.lean.angle != 0, time < 12 {
+            XCTAssertEqual(fresh.cadence, look.swimInterval, "righting himself is not at the swim's rate")
+            time += fresh.cadence
+            fresh.step(fresh.cadence)
+        }
         fresh.step(fresh.cadence)
-        XCTAssertEqual(fresh.cadence, look.frameInterval, "arrived, he is not back at the look's rate")
+        XCTAssertEqual(fresh.cadence, look.frameInterval, "arrived and upright, he is not back at the look's rate")
         XCTAssertEqual(fresh.frameRate, 24)
         run(fresh, seconds: look.restAfter + 1)
         XCTAssertEqual(fresh.cadence, look.restInterval, "arrived, he never rested")

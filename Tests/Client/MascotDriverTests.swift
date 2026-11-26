@@ -269,7 +269,7 @@ final class MascotDriverTests: XCTestCase {
     }
 
     /// At a frame interval of a second the link calls back once a second, and the roam's clock is
-    /// real time: the settle is 0.6 s of it and the glide goes at the look's speed, not at the
+    /// real time: the settle is 0.6 s of it and the swim goes at its own pace, not at the
     /// tenth of it a per-callback cap under the interval would make it. A stall longer than a frame
     /// moves the clock two frames on.
     func testTheClockIsRealTimeAtAFrameIntervalOfASecond() throws {
@@ -278,7 +278,7 @@ final class MascotDriverTests: XCTestCase {
         defer { window.isHidden = true }
         window.addSubview(canvas)
         let input = MascotState(model: "claude-sonnet-5").input
-        // No hurry, so a glide under a turn is at the stroll too.
+        // No hurry, so a swim under a turn is at the cruise too.
         var settings = Self.settings
         settings.hurry = 1
         func apply(_ field: MascotField) {
@@ -295,7 +295,7 @@ final class MascotDriverTests: XCTestCase {
         canvas.fire(at: stamp)
         XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
         XCTAssertEqual(canvas.roam?.roost.name, "gap", "a 0.6 s settle was not over a second in")
-        // Room opens straight above him and a turn lands where he stands: he strolls up to it.
+        // Room opens straight above him and a turn lands where he stands: he swims up to it.
         var roomy = Self.open
         roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600), CGRect(x: 200, y: 500, width: 200, height: 100)]
         apply(roomy)
@@ -305,7 +305,7 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertEqual(canvas.clock, 1 + 1.0002 + 0.9997, accuracy: 1e-6, "the clock is not real time")
         let glide = try XCTUnwrap(canvas.roam?.move, "no glide once the settle was over")
-        // Each second of callbacks is a second of the stroll: the glide's pace is the look's,
+        // Each second of callbacks is a second of the swim: its pace is the swim's own,
         // whatever the frame interval.
         var steps = 0
         while let move = canvas.roam?.move, steps < 30 {
@@ -316,7 +316,7 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertNil(canvas.roam?.move, "the glide did not end")
         XCTAssertEqual(Double(steps), glide.duration - glide.elapsed, accuracy: 1.001,
-                       "a glide of \(glide.duration) s at the look's speed took \(steps) callbacks of a second")
+                       "a swim of \(glide.duration) s took \(steps) callbacks of a second")
         // A stall of a minute moves the clock by the cap, two frames.
         let clock = canvas.clock
         stamp += 60
@@ -352,8 +352,9 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(canvas.roam?.roost.name, "gap")
     }
 
-    /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
-    /// for, so a thinking guest goes on thinking rather than being put back to idle.
+    /// The stroke's poses are worn only while he swims, and the glide while he rights himself after
+    /// it; upright again he wears the activity he stands for, so a thinking guest goes on thinking
+    /// rather than being put back to idle.
     func testTheStrokeIsWornOnlyWhileHeSwimsAndHisActivitySurvivesIt() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
@@ -384,6 +385,13 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertTrue(swam, "he never swam")
         XCTAssertEqual(worn, ["swimOpen", "swimThrust", "swimTrail"], "not the stroke's poses while he swam")
+        var righting = 0
+        while canvas.lean.angle != 0, righting < 120 {
+            XCTAssertEqual(canvas.driver.input.activity, "swimTrail", "a pose other than the glide drawn turned")
+            canvas.step(1.0 / 30)
+            righting += 1
+        }
+        XCTAssertEqual(canvas.lean.angle, 0, "never upright")
         XCTAssertEqual(canvas.driver.input.activity, "thinking", "the swim put him back to something else")
         XCTAssertEqual(canvas.driver.input.corner, 0, "the engine's own stroll is not his to take")
     }

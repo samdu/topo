@@ -188,6 +188,17 @@ final class MascotBallTests: XCTestCase {
         XCTAssertEqual(roam.moves, moves)
     }
 
+    /// The transcript going back to unread lets go of a ball at once: nothing is decided while it is.
+    func testABallIsLetGoWhenTheTranscriptIsToBeReadAgain() throws {
+        let far = { (y: CGFloat) in MascotRoamTests.field([CGRect(x: 0, y: y, width: 402, height: 40)]) }
+        let (placed, start) = settled(far(10))
+        var roam = placed
+        roam.observe(far(7), at: start + Self.frame)
+        XCTAssertNotNil(roam.ball, "the words moved and he did not ball up")
+        roam.wait(true, at: start + 2 * Self.frame)
+        XCTAssertNil(roam.ball, "a ball kept over a transcript to be read")
+    }
+
     /// Under Reduce Motion there is no ball and no swim: a turn reaching him places him.
     func testReduceMotionNeverBallsHimUp() throws {
         var settings = Self.settings

@@ -66,15 +66,28 @@ final class MascotSwimTests: XCTestCase {
         XCTAssertTrue(done.done)
     }
 
-    /// Bent to a new end, the swim leaves him where he is and goes on to it.
+    /// Bent to a new end, the swim leaves him where he is drawn — not where the old swim had him
+    /// — and every point of the rest of it is on the way from there to the new end; in its coast,
+    /// with no stroke left, it is a stroke from the shot, from where he is.
     func testARetargetedSwimKeepsHimWhereHeIs() {
-        var move = MascotRoam.Move(from: .zero, to: CGPoint(x: 0, y: 300), stride: 93)
-        move.swim.elapsed = 1.5
-        let here = move.point
-        move.retarget(CGPoint(x: 40, y: 310))
-        XCTAssertEqual(move.point.x, here.x, accuracy: 1e-6)
-        XCTAssertEqual(move.point.y, here.y, accuracy: 1e-6)
-        XCTAssertEqual(move.at(move.duration), CGPoint(x: 40, y: 310))
+        for elapsed in [0.4, 1.5, 3.4] {
+            var move = MascotRoam.Move(from: .zero, to: CGPoint(x: 0, y: 300), stride: 93)
+            move.swim.elapsed = elapsed
+            let here = CGPoint(x: move.point.x + 3, y: move.point.y - 7), end = CGPoint(x: 40, y: 310)
+            move.retarget(end, from: here)
+            XCTAssertEqual(move.point.x, here.x, accuracy: 1e-6, "at \(elapsed)")
+            XCTAssertEqual(move.point.y, here.y, accuracy: 1e-6, "at \(elapsed)")
+            XCTAssertEqual(move.at(move.duration), end, "at \(elapsed)")
+            var t = move.elapsed
+            while t <= move.duration {
+                let p = move.at(t)
+                // On the segment from here to the end: no point outside the box the two make.
+                XCTAssertTrue(p.x >= min(here.x, end.x) - 1e-6 && p.x <= max(here.x, end.x) + 1e-6
+                              && p.y >= min(here.y, end.y) - 1e-6 && p.y <= max(here.y, end.y) + 1e-6,
+                              "at \(elapsed): \(p) off the way from \(here) to \(end)")
+                t += 1.0 / 60
+            }
+        }
     }
 
     /// His head leads: the lean closes on the way he goes, the short way round, at 16 a second, and
@@ -100,6 +113,11 @@ final class MascotSwimTests: XCTestCase {
         XCTAssertEqual(abs(lean.angle), MascotLean.most, accuracy: 1e-9, "turned past three-quarters over")
         XCTAssertEqual(lean.angle + lean.trail(down) * .pi / 180, lean.angle > 0 ? -.pi / 2 + 2 * .pi : -.pi / 2,
                        accuracy: 1e-9, "arms not streamed up the screen")
+        // From three-quarters over one way, a swim the other way turns him to it, through upright,
+        // rather than holding him at the limit.
+        let leftward = CGVector(dx: -100, dy: 0)
+        for _ in 0..<120 { lean.step(1.0 / 60, heading: leftward) }
+        XCTAssertEqual(lean.angle, -.pi / 2, accuracy: 0.01, "held at the limit swimming the other way")
         var left = MascotLean()
         left.step(1.0 / 60, heading: CGVector(dx: -1, dy: 0))
         XCTAssertLessThan(left.angle, 0, "turned the long way round")

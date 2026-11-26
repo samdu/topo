@@ -929,18 +929,10 @@ struct MascotRoam: Equatable, Sendable {
         var done: Bool { swim.done }
         func at(_ elapsed: Double) -> CGPoint { swim.at(elapsed).point }
 
-        /// The same swim, ending at `to` instead: he stays where he is now, and the rest of the way
-        /// bends to the new end (the start moved so the stroke he is in carries on from here).
-        mutating func retarget(_ to: CGPoint) {
-            let f = Double(swim.fraction(at: swim.elapsed))
-            let point = swim.point
-            // Past the last moment of the coast there is no way left to bend, and the end moves
-            // him; before it, however near the end, the start moves instead.
-            if f < 1 - 1e-6 {
-                swim.from = CGPoint(x: (point.x - to.x * CGFloat(f)) / CGFloat(1 - f),
-                                    y: (point.y - to.y * CGFloat(f)) / CGFloat(1 - f))
-            }
-            swim.to = to
+        /// The same swim, from `here`, where he is drawn, to `to` instead: the stroke he is in
+        /// carries on, and the rest of the way is between the two (`MascotSwim.bend`).
+        mutating func retarget(_ to: CGPoint, from here: CGPoint) {
+            swim.bend(from: here, to: to)
         }
     }
 
@@ -1057,7 +1049,11 @@ struct MascotRoam: Equatable, Sendable {
     /// The pose of the stroke he is in: the scrunch while he is a ball; nil while he is not swimming.
     var phase: MascotSwim.Phase? { move?.phase ?? (ball != nil ? .open : nil) }
     /// The way he is going, which his head leads along; nil while he is not under way.
-    var course: CGVector? { move.map { CGVector(dx: $0.to.x - $0.from.x, dy: $0.to.y - $0.from.y) } }
+    /// The way the swim goes, none for a swim of no length, which has no way for his head to lead.
+    var course: CGVector? {
+        guard let move, hypot(move.to.x - move.from.x, move.to.y - move.from.y) > 0.5 else { return nil }
+        return CGVector(dx: move.to.x - move.from.x, dy: move.to.y - move.from.y)
+    }
     /// There is something the clock has to move on: a swim, a ball, or a decision waiting on the quiet.
     var needsTime: Bool { move != nil || ball != nil || unsettled || visitDue }
     /// A code block the voice has reached that he has not gone to stand beside yet: roaming, the
@@ -1171,11 +1167,13 @@ struct MascotRoam: Equatable, Sendable {
                 self.move = nil
                 decide(glide: true, standing: false, scrunched: true)
                 // A new roost within his clearance of where he was going is the same swim carried
-                // on, since the words he goes between moved and not his mind: not counted as
-                // another, and bent from where he is to where it now ends, so his stroke goes on.
-                if let next = self.move, hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
+                // on, since the words he goes between moved and not his mind; so is any new roost
+                // while the words are still on the move that set him going (`braced`), so a drag
+                // is a swim that bends rather than a swim after a swim. Neither is counted as
+                // another, and each is bent from where he is to where it now ends.
+                if let next = self.move, braced || hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
                     var kept = move
-                    kept.retarget(next.to)
+                    kept.retarget(next.to, from: from)
                     self.move = kept
                     moves -= 1
                 }
@@ -1213,6 +1211,7 @@ struct MascotRoam: Equatable, Sendable {
         guard waiting != self.waiting else { return }
         now = max(now, time)
         self.waiting = waiting
+        if waiting { ball = nil }
         changed = now
         unsettled = true
         // A placed Topo is nowhere while the transcript is to be read, as a roaming one is.
@@ -1441,7 +1440,8 @@ struct MascotRoam: Equatable, Sendable {
 
     /// A provisional shot put right once the words have stopped or gone as far as its guess carried
     /// them: the place nearest where it was going on the real geometry, riding the words where a
-    /// word displaces him, and a kick toward it from where he is if it is more than `correction` off.
+    /// word displaces him; the shot bends to it, or, once the words are quiet and it is more than
+    /// `correction` off, he kicks toward it from where he is.
     private mutating func correct(_ move: Move) {
         var kept = move
         kept.provisional = false
@@ -1451,14 +1451,17 @@ struct MascotRoam: Equatable, Sendable {
         guard let next = self.move, self.moves > moves else {
             // The place is within his clearance of where he is: the shot bends to end there rather
             // than stopping him mid-stroke. With no place at all, decide left him nowhere.
-            if position != nil, let end = roost.frame?.origin {
-                kept.retarget(end)
+            if let here = position, let end = roost.frame?.origin, hypot(end.x - here.x, end.y - here.y) > MascotRoost.epsilon {
+                kept.retarget(end, from: here)
                 self.move = kept
             }
             return
         }
-        if hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= Self.correction {
-            kept.retarget(next.to)
+        // While the words still move, the shot bends however far off it was, a swim that turns
+        // rather than one after another; once they are quiet, one that far off is a kick.
+        let moving = now - changed <= Self.quietFor
+        if moving || hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= Self.correction, let here = position {
+            kept.retarget(next.to, from: here)
             self.move = kept
             self.moves = moves
         }
@@ -1586,20 +1589,18 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
-    /// placement (`atOnce`); a new policy or pin is a glide (`switched`); the
-    /// keyboard coming or going under a pin is a glide, at the hurry up and the stroll back
-    /// (`keyboard`); any other geometry moves him with it at once, or turns a glide under way
-    /// toward where he now goes (`geometry`).
+    /// placement (`atOnce`); a new policy or pin is a swim (`switched`); the keyboard coming or
+    /// going under a pin is a swim, hurried both ways (`keyboard`); any other geometry moves him
+    /// with it at once, or bends a swim under way toward where he now goes (`geometry`).
     enum Arrival: Equatable, Sendable { case atOnce, switched, keyboard, geometry }
 
     /// Where the look places him, when it does: the glass or the pin, from the geometry as it is,
     /// arriving as `arrival` says. On the glass he rides the pane, placed at once wherever it goes
     /// but for a new policy, which is the one glide. At a pin, the keyboard coming up over him
-    /// sends him clear of it at the hurry, and its going sends him back to the pin at the stroll;
-    /// the pin itself is the look's and nothing here writes it. A new policy's glide is at `parting`
-    /// times the stroll. A glide under way is turned toward
-    /// where he now goes at its own pace, and at the hurry once the keyboard is up; on the short
-    /// glass it ends where he goes. He faces the
+    /// sends him clear of it and its going sends him back to the pin, each a hurried swim; the pin
+    /// itself is the look's and nothing here writes it. A new policy's swim is hurried. A swim under
+    /// way is bent toward where he now goes, at its own pace; on the short glass it ends where he
+    /// goes. He faces the
     /// half of the transcript his box's centre is in, as he does roaming. With no pane to stand on,
     /// or no transcript to be pinned in, he stands nowhere and is not drawn.
     private mutating func perch(_ arrival: Arrival) {
@@ -1631,7 +1632,7 @@ struct MascotRoam: Equatable, Sendable {
         } else if var move {
             guard hypot(move.to.x - to.x, move.to.y - to.y) > MascotRoost.epsilon else { return }
             // The same swim, bent to where he now goes: not another.
-            move.retarget(to)
+            move.retarget(to, from: from)
             self.move = move
         } else if hypot(to.x - from.x, to.y - from.y) <= MascotRoost.epsilon {
             // Where he is, to a rounding: a pin read back from the place a drag left him. His roost
@@ -1736,8 +1737,8 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// The press was cancelled — a call, an alert, the system taking the touch — rather than let
-    /// go: nothing is pinned, and he goes back to where his policy puts him, with a glide at the
-    /// stroll, or, roaming, to a roost decided from where the finger left him.
+    /// go: nothing is pinned, and he goes back to where his policy puts him with a hurried swim,
+    /// or, roaming, to a roost decided from where the finger left him.
     mutating func cancelDrag() {
         guard dragging else { return }
         dragging = false

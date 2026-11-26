@@ -201,11 +201,14 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// while he does anything. The clock stops with the link, so a rest goes on across his being
     /// hidden and he is not woken to the look's rate by coming back.
     private var restingSince: Double?
-    /// What a frame lasts now: `swimInterval` while he swims, `workInterval` while he wears a pose
+    /// What a frame lasts now: `swimInterval` while he swims or rights himself after a swim, `workInterval` while he wears a pose
     /// of a turn's, `restInterval` once he has rested `restAfter`, `interval` otherwise.
     private(set) var cadence = Look.Mascot().frameInterval
     /// Which way his picture is turned: his head leads where he swims.
     private(set) var lean = MascotLean()
+    /// Where his arms trailed in his own picture as his last swim ended, from where they come in
+    /// to straight behind him (90°) while he rights himself after it.
+    private var lastTrail: Double?
     /// What he stands for, before the swim is put on him.
     private var input = TopoInput()
     /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he stands anywhere.
@@ -446,9 +449,17 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         // swims holding it, upright: the words stay up for as long as he is handed them.
         worn.corner = 0
         let swimming = roam.swimming && worn.sign == nil
+        // Arrived, he tips back upright still in the glide, his arms coming in from where they
+        // trailed to straight behind him, and takes up what he was doing once he is upright: no
+        // other pose is drawn turned.
+        let righting = !swimming && worn.sign == nil && lean.angle != 0
         if swimming, let phase = roam.phase {
             worn.activity = phase.rawValue
             if let course = roam.course { worn.trail = lean.trail(course) }
+            lastTrail = worn.trail ?? lastTrail
+        } else if righting {
+            worn.activity = MascotSwim.Phase.trail.rawValue
+            worn.trail = lastTrail
         }
         if driver.input.activity != worn.activity || driver.input.model != worn.model
             || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0
@@ -460,12 +471,12 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         // something else. Rested `restAfter` by the clock, his frames come at the rest's rate; a
         // swim brings the swim's on the frame it is seen, a turn's pose the work's, and anything
         // else the look's.
-        if worn.activity == "idle", !roam.dragging, !swimming {
+        if worn.activity == "idle", !roam.dragging, !swimming, !righting {
             restingSince = restingSince ?? clock
         } else {
             restingSince = nil
         }
-        if swimming {
+        if swimming || righting {
             cadence = swimInterval
         } else if worn.activity != "idle", worn.sign == nil {
             cadence = workInterval
@@ -623,7 +634,15 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         if let roam { MascotTrace.shared?.advanced(roam, at: clock) }
         #endif
         // His head leads while he is under way; arrived, or balled with nowhere yet, he rights himself.
-        if let roam { lean.step(dt, heading: roam.swimming && input.sign == nil ? roam.course : nil) }
+        if let roam {
+            let swimming = roam.swimming && input.sign == nil
+            lean.step(dt, heading: swimming ? roam.course : nil)
+            // Righting himself, his arms come in to straight behind him as he comes upright, so
+            // what he takes up next starts from them there.
+            if !swimming, lean.angle != 0, let trail = lastTrail {
+                lastTrail = trail + (90 - trail) * min(1, max(dt, 0) * MascotLean.upright)
+            }
+        }
         sync()
         driver.tick(dt)
     }
