@@ -504,8 +504,7 @@ struct Look: Equatable, Sendable {
         /// pixel, and the space between him and the line under him.
         var signScale: CGFloat = 1.5
         var signSpacing: CGFloat = 4
-        /// The line under him: what a tap on the sign does, then that the code is copied, which
-        /// is a confirmation and wears `highlight`.
+        /// The line under him while he holds the sign: what a tap on it does.
         var signFont = Font.footnote
         /// The largest a look document sets the line in, in points, and the most the line is
         /// drawn in at any text size: two lines of it, a style past that shrunk to fit, to a
@@ -514,12 +513,17 @@ struct Look: Equatable, Sendable {
         static let signLineMost: CGFloat = 84
         static let signLineShrink: CGFloat = 0.25
         var signInk = Theme.textMuted
-        var copiedInk = Theme.highlight
-        /// How far the sign jumps at the tap, and how long the confirmation stands before
-        /// GitHub's page opens over it.
+        /// How far the sign jumps at the tap, and how long the board says Copied after a copy,
+        /// which at the foot of the page is also how long before GitHub's page opens over it.
         var copiedBump: CGFloat = 1.08
         var copiedPause: CGFloat = 0.9
         static let copiedPauseRange: ClosedRange<Double> = 0...3
+        /// Topo over GitHub's page while it is up: points an art pixel, and how far under the top of
+        /// the screen's safe area the top of his sign's board stands once he has swum there, which
+        /// is below the browser's own bar, so its close button and the page's address stay in sight.
+        var signOverPageScale: CGFloat = 1
+        var signOverPageTop: CGFloat = 84
+        static let signOverPageTopRange: ClosedRange<Double> = 80...400
     }
     /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
     /// carries two flanks and, set into the middle of it, the microphone in its well. With the
