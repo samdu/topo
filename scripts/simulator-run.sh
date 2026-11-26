@@ -60,7 +60,21 @@
 # CloudKit token on disk, so after a reboot Settings still shows the account, nothing asks for the
 # password, and CloudKit answers "temporarily unavailable"; a change of the account's password
 # ends it without a restart, with an Apple Account Verification alert. --renew signs the account out in
-# Settings and in again, typing the password once; it is asked for by name, never taken.
+# Settings and in again, typing the password once. A --send whose iCloud check answers "account
+# temporarily unavailable" renews it itself, once a run, as do a --talk, a --guest-turn and a launch
+# to drive by hand on a device the run booted, when a sign-in has passed on it since its last --erase
+# (<udid>.signed-in); each renewal is logged with why in ~/Library/Caches/topo-sim/renewals.log.
+# A sign-in that stopped is recorded there (<udid>.sign-in-stopped): no run renews that device until
+# a --sign-in passes, nor shuts it down within the half hour its code screen may stand, since a refused password typed again is how an
+# account is locked.
+#
+# A booted simulator holds gigabytes of the Mac's memory, so a run that used the device shuts it
+# down as it ends, passed or failed, signal included, unless something else is using it (another
+# simulator-run.sh, or an xcodebuild or simctl naming the udid) or the run leaves it up on
+# purpose: a launch with nothing to wait for (to drive by hand), a --sign-in, and a sign-in that
+# stopped in the last half hour (its code screen stays up for SIGNIN_CODE). The janitor shuts what is left once it has
+# stood idle (docs/janitor.md). Every boot, the check before a shutdown and --talk's reboot are made under one lock in
+# ~/Library/Caches/topo-sim (TOPO_SIM_STATE), with the device's last use beside it.
 # The password is typed through RedactedTyping, never XCTest's typeText, which writes what it
 # types into its activity's title and so into the run's output and the result bundle.
 #
@@ -168,7 +182,7 @@ while [ $# -gt 0 ]; do
     --renew) renew=yes; shift ;;
     --resume) resume=yes; shift ;;
     --leak-check) leakcheck=yes; shift ;;
-    -h|--help) sed -n '2,121p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,136p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -190,10 +204,132 @@ print(max(found)[1] if found else "")' "$device")"
 [ "$resume" = no ] || [ -z "${SIGNIN_CODE:-}" ] || { echo "--resume types nothing, so it takes no SIGNIN_CODE" >&2; exit 2; }
 [ "$leakcheck" = no ] || [ "$signin" = no ] || { echo "--leak-check signs nothing in: run it alone, on a simulator signed into nothing that matters" >&2; exit 2; }
 
+# The device is shared by every worktree's runs, and a booted simulator holds gigabytes of
+# buddybox's memory, so a run that used it shuts it down as it ends (`release_device`, from
+# `cleanup`) unless another run is using it or this run's purpose is to leave it up. What says a
+# run is using it is the process list, read and never signalled: a simulator-run.sh other than
+# this one and its children (on any device, since DEVICE is not in its arguments), or an
+# xcodebuild or simctl naming the udid. A boot and the check-then-shutdown are made under one
+# lock (`$simstate/mutex`), so a run that starts while another is ending finds the device either
+# up or shut, never mid-shutdown. `$simstate/<udid>.last-use` is when a run last used the device,
+# which the janitor reads before shutting one that has stood idle (docs/janitor.md).
+simstate="${TOPO_SIM_STATE:-$HOME/Library/Caches/topo-sim}"
+mkdir -p "$simstate"
+touched=no
+booted_here=no
+leave=""
+stopped="$simstate/$udid.sign-in-stopped"
+# A sign-in of the account passed on this device since its last --erase: the evidence a boot of it
+# has a sign-in to renew, rather than a device a renewal would sign in for the first time.
+signedin="$simstate/$udid.signed-in"
+
+used_now() { touch "$simstate/$udid.last-use" 2>/dev/null || true; }
+
+# A record as it stands: its time and its words. A stop put back whole (the rename from .prior)
+# is the record it was.
+record_id() { { stat -f '%Fm' "$1" && cat "$1"; } 2>/dev/null || echo none; }
+signed_seen=""
+
+# Whether a sign-in stopped on the device within the last half hour, in which time its code screen
+# may still be up for SIGNIN_CODE; an older stop still refuses a renewal, and keeps nothing up.
+stop_fresh() {
+  [ -e "$stopped" ] && [ $(( $(date +%s) - $(stat -f %m "$stopped" 2>/dev/null || echo 0) )) -lt 1800 ]
+}
+
+# The processes, other than this run and its children, using the device; one line each. A run
+# is the script as the program, or as the first operand of a shell or env after its options; an
+# xcodebuild or simctl uses the device when one of its arguments, or a comma-separated field of
+# one (a destination's `id=<udid>`), names it. A process list that cannot be read fails, so a
+# caller leaves the device as it is rather than taking the silence for nobody.
+others_using() {
+  local listed
+  listed="$(ps -axwwo pid=,ppid=,command=)" && [ -n "$listed" ] || return 1
+  printf '%s\n' "$listed" | awk -v me="$$" -v u="$udid" '
+    function base(x,   n, a) { n = split(x, a, "/"); return a[n] }
+    { pid[NR] = $1; ppid[NR] = $2; line[NR] = $0 }
+    END {
+      mine[me] = 1
+      do { grew = 0; for (i = 1; i <= NR; i++) if (!(pid[i] in mine) && (ppid[i] in mine)) { mine[pid[i]] = 1; grew = 1 } } while (grew)
+      for (i = 1; i <= NR; i++) {
+        if (pid[i] in mine) continue
+        nf = split(line[i], f, " ")
+        prog = base(f[3]); using = (prog == "simulator-run.sh")
+        if (!using && (prog ~ /^(ba|z|da)?sh$/ || prog == "env")) {
+          for (j = 4; j <= nf; j++) {
+            if (f[j] == "--") { j++; using = (j <= nf && base(f[j]) == "simulator-run.sh"); break }
+            if (prog == "env") {
+              if (f[j] ~ /^-[A-Za-z]*[uPSC]$/) { j++; continue }
+              if (f[j] ~ /^-/ || f[j] ~ /=/) continue
+              if (base(f[j]) ~ /^(ba|z|da)?sh$/) { prog = base(f[j]); continue }
+            } else {
+              if (f[j] ~ /^-[A-Za-z]*c[A-Za-z]*$/) break
+              if (f[j] == "--rcfile" || f[j] == "--init-file" || f[j] ~ /^[-+][A-Za-z]*[oO]$/) { j++; continue }
+              if (f[j] ~ /^[-+]/) continue
+            }
+            using = (base(f[j]) == "simulator-run.sh"); break
+          }
+        }
+        if (!using && (prog == "xcodebuild" || prog == "xcrun" || prog == "simctl"))
+          for (j = 4; j <= nf && !using; j++) {
+            n = split(f[j], part, ",")
+            for (k = 1; k <= n; k++) if (part[k] == u || part[k] == "id=" u) { using = 1; break }
+          }
+        if (using) print substr(line[i], 1, 160)
+      }
+    }'
+}
+
+# What is using the device, or why that cannot be told; empty when nothing is.
+users_now() {
+  others_using || echo "the process list could not be read"
+}
+
+# Boots the device, under the lock, and waits for it.
+boot_device() {
+  touched=yes
+  used_now
+  { lockf -s -t "${TOPO_SIM_LOCK_WAIT:-120}" 7 || { echo "==> another run has held $simstate/mutex for ${TOPO_SIM_LOCK_WAIT:-120} s" >&2; return 1; }
+    ! xcrun simctl boot "$udid" 6>&- 7>&- 2>/dev/null || booted_here=yes
+  } 7>"$simstate/mutex"
+  xcrun simctl bootstatus "$udid" -b >/dev/null
+  # The first boot is when this run learned the sign-in ended; a later one learns nothing new.
+  [ -n "$signed_seen" ] || signed_seen="$(record_id "$signedin")"
+}
+
+# Shuts the device down as the run ends, unless the run leaves it up on purpose or another run
+# is using it. Bounded, and never failing the run: a device left up is the janitor's.
+release_device() {
+  [ "$touched" = yes ] || return 0
+  used_now
+  [ -n "$leave" ] || ! stop_fresh || leave="a sign-in on it stopped within the half hour, and its code screen may stand"
+  if [ -n "$leave" ]; then
+    echo "==> $udid is left booted: $leave. The janitor shuts it down once it has stood idle"
+    return 0
+  fi
+  local users
+  { if ! lockf -s -t 60 7; then
+      echo "==> $udid is left booted: another run has held $simstate/mutex for a minute"
+    else
+      users="$(users_now)"
+      if stop_fresh; then
+        echo "==> $udid is left booted: a sign-in on it stopped within the half hour, and its code screen may stand"
+      elif [ -n "$users" ]; then
+        echo "==> $udid is left booted for the runs using it:"
+        printf '%s\n' "$users" | sed 's/^/      /'
+      elif timeout 120 xcrun simctl shutdown "$udid" 7>&- >/dev/null 2>&1; then
+        echo "==> $udid is shut down; its iCloud sign-in ends with it, and the next --send renews it"
+      else
+        echo "==> $udid would not shut down; the janitor tries again once it has stood idle"
+      fi
+    fi
+  } 7>"$simstate/mutex"
+}
+
 if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl erase "$udid"
+  rm -f "$signedin" "$stopped" "$stopped.prior" "$stopped.new"
   echo "==> erased; the simulator's iCloud account and the app's data are gone"
   exit 0
 fi
@@ -263,6 +399,10 @@ cleanup() {
   [ -z "$log" ] || rm -f "$log"
   # A newer run in this worktree has its own pids file under the same name.
   [ "$(head -1 "$pids" 2>/dev/null)" != "$$" ] || rm -f "$pids"
+  # A signal inside a brace group holding the mutex on 7 leaves it open here; release takes the
+  # mutex afresh, and would otherwise wait on this run's own hold.
+  exec 7>&-
+  release_device || true
   exec >&- 2>&-
   local deadline=$((SECONDS + 2))
   while [ "$SECONDS" -lt "$deadline" ] && kill -0 "$tee_pid" 2>/dev/null; do
@@ -279,8 +419,12 @@ running_child() {
 }
 
 # Runs a command as a recorded child and waits for it, returning its status.
+# Descriptor 6 is the sign-in lock (take_sign_in), closed here and in serve_once's listener,
+# since a redirect on the function's call does not reach what the function starts in the background.
+# With tracked_out set, what the command prints goes to that file alone, for its caller to read
+# and pass on once it has ended.
 tracked() {
-  "$@" &
+  if [ -n "${tracked_out:-}" ]; then "$@" 6>&- >"$tracked_out" 2>&1 & else "$@" 6>&- & fi
   local pid=$! status=0
   echo "$pid" >>"$pids"
   started_pids="$started_pids $pid"
@@ -321,7 +465,7 @@ while time.monotonic() < deadline:
         if asked == nonce:
             peer.sendall(secret)
             sys.exit(0)
-sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") &
+sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") 6>&- &
   listener=$!
   served_by=$listener
   echo "$listener" >>"$pids"
@@ -455,8 +599,7 @@ server.serve_forever()' "$pagefile" &
   page_port="$(cat "$pagefile" 2>/dev/null)"
   rm -f "$pagefile"
   [ -n "$page_port" ] || { echo "the leak check's page did not start" >&2; exit 1; }
-  xcrun simctl boot "$udid" 2>/dev/null || true
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  boot_device
   status=0
   counts="$derived/leak-check.$$.counts"
   : >"$counts"
@@ -533,7 +676,10 @@ if [ "$build" = yes ]; then
   scripts/fetch-phonon.sh
 fi
 
-if [ "$signin" = yes ]; then
+# Signs the device into the account through Settings (TopoSimulatorSignIn), a first sign-in or,
+# with renew=yes, out and in again. Returns the run's status; a stop is recorded in $stopped,
+# which a later automatic renewal reads and does not try past, and a pass clears it.
+sign_in() {
   # The password is read into a variable and leaves it once, on a pipe to a listener on the
   # host's loopback that answers one request carrying this run's nonce and exits. It is never an
   # argument, a file or a variable of the test runner's environment, which the result bundle's
@@ -544,33 +690,51 @@ if [ "$signin" = yes ]; then
   nonce="" port=""
   # --resume reads no password and serves none: it only answers the screens after one.
   if [ "$resume" = no ]; then
-    password="$(op-item get 'Buddy Apple ID' password)" || password=""
+    password="$(op-item get 'Buddy Apple ID' password 6>&-)" || password=""
     [ -n "$password" ] || { echo "no password from the vault item 'Buddy Apple ID'" >&2; exit 1; }
     nonce="$(uuidgen)"
     serve_once "$nonce" password
     port="$served_port"
   fi
   results="$derived/TopoSimulatorSignIn.xcresult"
+  signout="$derived/TopoSimulatorSignIn.out"
+  : >"$signout"
+  # Recorded before Settings is driven, so a run that ends mid-sign-in, by a signal included,
+  # leaves a stop behind: an attempt nobody saw finish is one that may have been refused.
+  # A stop standing is kept aside, with its time, for a sign-in that types nothing to put back.
+  # The new record replaces it whole (a rename), so the stop never goes missing meanwhile.
+  rm -f "$stopped.prior" "$stopped.new"
+  [ ! -e "$stopped" ] || ln "$stopped" "$stopped.prior"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: begun and not seen to finish; see $results" >"$stopped.new"
+  mv -f "$stopped.new" "$stopped"
   rm -rf "$results"
-  xcrun simctl boot "$udid" 2>/dev/null || true
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  # A boot that could not be made under the lock is no device to type a password into.
+  # Nothing has been typed, so the records go back as they were.
+  if ! boot_device; then
+    if [ -e "$stopped.prior" ]; then mv -f "$stopped.prior" "$stopped"; else rm -f "$stopped"; fi
+    echo "==> the device could not be booted for the sign-in, so nothing was typed" >&2
+    return 1
+  fi
   echo "==> signing $udid into $account through Settings (TopoSimulatorSignInTests)"
   status=0
   TEST_RUNNER_TOPO_SIGNIN_ACCOUNT="$account" TEST_RUNNER_TOPO_SIGNIN_PORT="$port" \
   TEST_RUNNER_TOPO_SIGNIN_NONCE="$nonce" TEST_RUNNER_TOPO_SIGNIN_CODE="${SIGNIN_CODE:-}" \
   TEST_RUNNER_TOPO_SIGNIN_RENEW="$([ "$renew" = yes ] && echo 1 || echo 0)" \
   TEST_RUNNER_TOPO_SIGNIN_RESUME="$([ "$resume" = yes ] && echo 1 || echo 0)" \
-    tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
+    tracked_out="$signout" tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme TopoSimulatorSignIn -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -only-testing:TopoSimulatorSignInTests/SimulatorSignInTests \
       -collect-test-diagnostics never -resultBundlePath "$results" || status=$?
+  # The test's own words, kept apart from the run's log, which another run in this worktree
+  # starts afresh: what the sign-in found is read from these.
+  cat "$signout"
   scripts/ci-require-tests.sh named "$results" TopoSimulatorSignInTests/SimulatorSignInTests || status=1
   # What the run left is counted for the password itself, as --leak-check counts a dummy: any run
   # of 8 of its characters in the run's log or the bundle fails the run and says where, never what.
   if [ "$resume" = no ]; then
     counted="" leaked=""
     if log_drained "counting the password in what this run left" \
-      && counted="$(count_runs password "$runlog" "$results" 3< <(printf '%s' "$password"))"; then
+      && counted="$(count_runs password "$runlog" "$signout" "$results" 3< <(printf '%s' "$password"))"; then
       leaked="$(printf '%s\n' "$counted" | grep -Ev ': (0|absent)$' || true)"
     else
       leaked="the count could not be made${counted:+: $counted}"
@@ -587,13 +751,125 @@ if [ "$signin" = yes ]; then
       fi
     fi
   fi
-  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
+  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$signout"; then
     echo "==> $udid was signed in already and Settings asks for no password. If --send reports 'account temporarily unavailable', its sign-in has ended (a restart of the simulator ends it with no prompt; a change of the account's password ends it with an Apple Account Verification alert, and dismissing that does not mend it): DEVICE=$udid scripts/simulator-run.sh --sign-in --renew signs the account out and in again, typing the password once. If --send reports another lapse, the test does not know the screen it shows"
   elif [ "$status" = 0 ]; then
     echo "==> $udid is signed in; DEVICE=$udid scripts/simulator-run.sh --send hello proves CloudKit answers"
   else
     echo "==> the sign-in stopped; the '[sign-in] stopped:' line above and $results say where. Type no password by hand before reading why: a refused one tried again locks the account" >&2
   fi
+  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$signout"; then
+    # Nothing was typed, so nothing is mended: a stop that stood still stands, and no sign-in is
+    # recorded for a run waiting on this one to read as a renewal.
+    if [ -e "$stopped.prior" ]; then mv -f "$stopped.prior" "$stopped"; else rm -f "$stopped"; fi
+  elif [ "$status" = 0 ]; then
+    # The pass recorded before the stop goes, so no moment stands with neither.
+    uuidgen >"$signedin"
+    rm -f "$stopped" "$stopped.prior"
+  else
+    rm -f "$stopped.prior"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: see $results" >"$stopped"
+    leave="its sign-in stopped, and a two-factor code screen it stopped on stays up for SIGNIN_CODE"
+  fi
+  return "$status"
+}
+
+# Renews a sign-in the device's restart ended: once a run, never past a sign-in that stopped
+# (a refused password typed again is how an account is locked), and logged with why, so the
+# count of password sign-ins is in $simstate/renewals.log.
+renew_sign_in() {
+  local why="$1" status=0
+  take_sign_in || exit 1
+  refuse_if_stopped "$why"
+  if [ "$signed_meanwhile" = yes ]; then
+    echo "==> $udid's iCloud sign-in had lapsed ($why), and another run's sign-in has renewed it since this run found it so"
+    drop_sign_in
+    return 0
+  fi
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $udid $why ($root)" >>"$simstate/renewals.log"
+  echo "==> $udid's iCloud sign-in has lapsed ($why); renewing it: --sign-in --renew, one password sign-in"
+  renew=yes
+  sign_in || status=$?
+  renew=no
+  drop_sign_in
+  if [ "$status" != 0 ]; then
+    echo "==> the renewal stopped, and no run renews this device again until a --sign-in passes. A two-factor stop leaves its code screen up: SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in types the code and goes on" >&2
+    exit "$status"
+  fi
+}
+
+# Fails the run, touching nothing, while a sign-in on the device stands stopped.
+refuse_if_stopped() {
+  [ -e "$stopped" ] || return 0
+  echo "==> $udid's iCloud sign-in has lapsed ($1), and an earlier sign-in on it stopped ($(cat "$stopped")), so this run types no password. Read why it stopped, then: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew (or SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in after a two-factor stop)" >&2
+  exit 1
+}
+
+# One sign-in on a device at a time: a run holds `<udid>.renewing` while it drives Settings, and
+# another that wants to waits for it (20 minutes at most). What the records were is read before
+# the lock is tried, so a sign-in that ended at any moment before this run held it is seen: one
+# that passed (a new `<udid>.signed-in`, signed_meanwhile) or one that stopped (a new stop,
+# stop_meanwhile). The lock is on descriptor 6, which the background jobs close (tracked,
+# serve_once), and drop_sign_in closes once the sign-in is over.
+take_sign_in() {
+  local signed_before stop_before prior_before
+  local waited=no
+  signed_meanwhile=no stop_meanwhile=no
+  # The sign-in this run found lapsed is the one recorded when it learned so, at its launch or
+  # its boot (signed_seen), not when it came here.
+  # A sign-in in flight has put the stop it found aside (.prior) and stands its own in its place;
+  # that one's end puts it back, removes it or writes its own, so the stop to compare with is the
+  # one put aside. A .prior still standing once this run holds the lock is no sign-in's in
+  # flight (every end takes it away but a signal's) and stands for nothing.
+  signed_before="${signed_seen:-$(record_id "$signedin")}" stop_before="$(record_id "$stopped")"
+  prior_before="$(record_id "$stopped.prior")"
+  exec 6>"$simstate/$udid.renewing"
+  if ! lockf -s -t 0 6; then
+    waited=yes
+    echo "==> another run is signing $udid in; waiting for it, 20 minutes at most"
+    if ! lockf -s -t 1200 6; then
+      echo "==> another run has been signing $udid in for 20 minutes; this run types nothing" >&2
+      return 1
+    fi
+  fi
+  [ "$(record_id "$signedin")" = "$signed_before" ] || [ ! -e "$signedin" ] || signed_meanwhile=yes
+  [ -e "$stopped.prior" ] || [ "$prior_before" = none ] || stop_before="$prior_before"
+  [ "$(record_id "$stopped")" = "$stop_before" ] || [ ! -e "$stopped" ] || stop_meanwhile=yes
+  # The record of a sign-in this run waited on, still standing as it began: it was ended unseen,
+  # a signal's end, and an attempt nobody saw finish may have been refused.
+  case "$waited $stop_before" in
+    "yes "*"begun and not seen to finish"*) [ "$(record_id "$stopped")" != "$stop_before" ] || stop_meanwhile=yes ;;
+  esac
+}
+drop_sign_in() { exec 6>&-; }
+
+# Renews the sign-in after this run booted the device, which ended it, when a sign-in has passed
+# on it before: a device with none recorded is not signed in for the first time unasked.
+renew_after_boot() {
+  if [ -e "$signedin" ]; then
+    renew_sign_in "$1"
+  else
+    echo "==> $udid has no sign-in recorded since its last --erase, so the run renews nothing; if it has an account, DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
+  fi
+}
+
+if [ "$signin" = yes ]; then
+  status=0
+  take_sign_in || exit 1
+  # A sign-in asked for by hand is the recovery from a stop, but only from one the person read:
+  # a sign-in that passed or stopped while this one waited for it is not what was asked about.
+  if [ "$signed_meanwhile" = yes ]; then
+    echo "==> the run this one waited for signed $udid in; this run types nothing"
+    leave="it was signed in for the runs after this one"
+    exit 0
+  elif [ "$stop_meanwhile" = yes ]; then
+    echo "==> the sign-in this run waited for stopped ($(cat "$stopped")), so this run types nothing. Read why it stopped, then run --sign-in again" >&2
+    exit 1
+  fi
+  sign_in || status=$?
+  drop_sign_in
+  # A sign-in shut down at once would end with the device: it lives in cloudd's memory alone.
+  [ "$status" != 0 ] || leave="it was signed in for the runs after this one"
   exit "$status"
 fi
 
@@ -620,16 +896,31 @@ if [ "$talk" = yes ]; then
   booted="$(process_start "$(pgrep -f "/Devices/$udid/data/var/run/launchd_bootstrap.plist" | head -1)")"
   audio="$(process_start "$(pgrep -x coreaudiod | head -1)")"
   if [ -n "$booted" ] && [ -n "$audio" ] && [ "$booted" -gt "$audio" ]; then
+    # The test uses the device whether or not this run booted it.
+    touched=yes
     echo "==> the simulator booted after coreaudiod started, so it hears the lane without a reboot"
+  elif [ -e "$stopped" ]; then
+    # A boot here renews the sign-in, which a standing stop refuses: say so before a reboot
+    # takes down the screen the stop may have left up.
+    refuse_if_stopped "a boot onto the lane's audio devices would end it"
   elif [ -z "$booted" ]; then
     echo "==> booting the simulator onto the lane's audio devices"
-    xcrun simctl boot "$udid" 2>/dev/null || true
-    xcrun simctl bootstatus "$udid" -b >/dev/null
+    boot_device
+    renew_after_boot "this run booted it, which ends its sign-in"
   else
-    echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started; the reboot ends its iCloud sign-in, so the turn's iCloud half will be refused until: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
-    xcrun simctl shutdown "$udid" 2>/dev/null || true
-    xcrun simctl boot "$udid"
-    xcrun simctl bootstatus "$udid" -b >/dev/null
+    echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started"
+    { lockf -s -t 120 7 || { echo "==> another run has held $simstate/mutex for 2 minutes" >&2; exit 1; }
+      users="$(users_now)"
+      if [ -n "$users" ]; then
+        echo "==> $udid booted before coreaudiod started and has to be rebooted to hear the lane, but these runs are using it; run --talk once they are done:" >&2
+        printf '%s\n' "$users" | sed 's/^/      /' >&2
+        exit 1
+      fi
+      refuse_if_stopped "a boot onto the lane's audio devices would end it"
+      xcrun simctl shutdown "$udid" 7>&- 2>/dev/null || true
+    } 7>"$simstate/mutex"
+    boot_device
+    renew_after_boot "this run rebooted it, which ends its sign-in"
   fi
   # The result bundle's session log records the test runner's environment whole, and the
   # environment the runner launches the app with, so the token is in neither: it is served once
@@ -679,7 +970,7 @@ if [ "$pressmic" = yes ]; then
   echo "==> pressing the microphone"
   # The test counts the permission prompts the run raises, so the app's grants go first, and the
   # flag says the reset happened: the count is exact only on a simulator that has answered nothing.
-  xcrun simctl bootstatus "$udid" -b >/dev/null
+  boot_device
   xcrun simctl privacy "$udid" reset all "$bundle"
   TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1 \
     tracked "${scrubbed[@]}" xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
@@ -687,19 +978,19 @@ if [ "$pressmic" = yes ]; then
       -collect-test-diagnostics never -only-testing:TopoUITests
 fi
 
-# A guest command alone needs no sign-in; anything else launches signed in.
-token=""
-if [ -z "$userland" ] || [ -n "$send" ]; then
-  read_token
-fi
-
-xcrun simctl bootstatus "$udid" -b >/dev/null
+boot_device
 if [ "$fresh" = yes ]; then
   xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
 fi
 xcrun simctl install "$udid" "$app"
+# A launch to drive by hand or for guest turns has no iCloud check to find a lapse at, and the
+# role it decides from CloudKit's records can sign the launch out (a viewer's arrival), which the
+# resident refuses to start under; so one on a device this run booted is renewed first. A guest
+# command alone needs no sign-in; a --send renews at its check.
+if [ -z "$send$userland" ] && [ "$booted_here" = yes ]; then
+  renew_after_boot "this run booted it, which ends its sign-in"
+fi
 
-log="$(mktemp -t topo-sim)"
 launcher=""
 # The launcher stays attached to the app's console only when there is a closing line to wait for.
 # An attached launcher never exits, since the app never does, so a run with nothing to wait for
@@ -708,33 +999,54 @@ attach=""
 if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
   attach=--console-pty
 fi
-# This run's id: the app prints it on the reply to the turn it sent, so neither a line from an
-# earlier launch nor a reply to some other turn can stand in for this run's answer.
-run="$(uuidgen)"
-launch=(SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland"
-        SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" SIMCTL_CHILD_TOPO_DEBUG_RUN="$run")
-# The token is served, never put in the launch's environment, which the simulator's log records.
-# The port goes in only with a token behind it: a launch that names a port and gets no token is
-# signed out (DebugRun.signIn), which a guest command alone is not asked to be. The app asks at
-# launch, so the listener waits two minutes and no longer, which bounds what a run killed by
-# SIGKILL, whose `cleanup` never runs, leaves listening.
-if [ -n "$token" ]; then
-  nonce="$(uuidgen)"
-  serve_once "$nonce" token 120
-  unset token
-  launch+=(SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT="$served_port" SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE="$nonce")
-fi
-echo "==> launching (run $run)"
-"${scrubbed[@]}" "${launch[@]}" \
-  xcrun simctl launch $attach --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
-launcher=$!
-echo "$launcher" >>"$pids"
-started_pids="$started_pids $launcher"
+# Launches the app: a fresh log, run id and served token each time, so a relaunch reads nothing
+# of the launch before it. A guest command alone needs no sign-in; anything else launches signed in.
+launch_app() {
+  token=""
+  if [ -z "$userland" ] || [ -n "$send" ]; then
+    read_token
+  fi
+  signed_seen="$(record_id "$signedin")"
+  [ -z "$log" ] || rm -f "$log"
+  log="$(mktemp -t topo-sim)"
+  # This run's id: the app prints it on the reply to the turn it sent, so neither a line from an
+  # earlier launch nor a reply to some other turn can stand in for this run's answer.
+  run="$(uuidgen)"
+  launch=(SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland"
+          SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" SIMCTL_CHILD_TOPO_DEBUG_RUN="$run")
+  # The token is served, never put in the launch's environment, which the simulator's log records.
+  # The port goes in only with a token behind it: a launch that names a port and gets no token is
+  # signed out (DebugRun.signIn), which a guest command alone is not asked to be. The app asks at
+  # launch, so the listener waits two minutes and no longer, which bounds what a run killed by
+  # SIGKILL, whose `cleanup` never runs, leaves listening.
+  if [ -n "$token" ]; then
+    nonce="$(uuidgen)"
+    serve_once "$nonce" token 120
+    unset token
+    launch+=(SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT="$served_port" SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE="$nonce")
+  fi
+  echo "==> launching (run $run)"
+  "${scrubbed[@]}" "${launch[@]}" \
+    xcrun simctl launch $attach --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
+  launcher=$!
+  echo "$launcher" >>"$pids"
+  started_pids="$started_pids $launcher"
+}
+launch_app
 
 fail() {
   grep '\[topo-debug\]' "$log" || cat "$log"
   echo "==> $*" >&2
   exit 1
+}
+
+# Ends this run's launcher and any listener still waiting to serve it.
+stop_launch() {
+  local pid
+  for pid in "$launcher" "$served_by"; do
+    if [ -n "$pid" ] && running_child "$pid"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+  done
+  launcher="" served_by=""
 }
 
 # Waits for the app to print `marker`: one prefixed line per step and a closing line when the
@@ -761,9 +1073,22 @@ if [ -n "$send" ]; then
   # The app asks CloudKit before the turn (DebugRun.iCloud) and says what it found in one line;
   # anything but an answer is a device whose iCloud sign-in is missing or has lapsed, which the
   # turn would only wait on at "Reaching iCloud…".
-  wait_for "icloud: " "the iCloud check"
-  icloud="$(grep -o '\[topo-debug\] icloud: .*' "$log" | head -1 | tr -d '\r')"
-  icloud="${icloud#\[topo-debug\] icloud: }"
+  read_icloud() {
+    wait_for "icloud: " "the iCloud check"
+    icloud="$(grep -o '\[topo-debug\] icloud: .*' "$log" | head -1 | tr -d '\r')"
+    icloud="${icloud#\[topo-debug\] icloud: }"
+  }
+  read_icloud
+  # Signed in to Settings with CloudKit refusing and nothing asking is the sign-in a restart of
+  # the device ended (docs/simulator.md, *A lapse*), which is every boot of a device this script
+  # shut down: the run renews it, once, and launches again.
+  if [ "$icloud" = "account temporarily unavailable" ]; then
+    stop_launch
+    renew_sign_in "CloudKit answered account temporarily unavailable"
+    waited=0
+    launch_app
+    read_icloud
+  fi
   case "$icloud" in
     answered) ;;
     "no account") fail "the simulator $udid has no iCloud account; sign it in with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
@@ -895,4 +1220,5 @@ else
   # wait for it is under TIMEOUT, as every wait on the app after the launch is.
   token_served "$timeout" || fail "the app never read the served token"
   echo "==> launched signed in"
+  leave="it was launched to be driven by hand"
 fi

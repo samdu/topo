@@ -409,6 +409,56 @@ class Decisions(unittest.TestCase):
         out = janitor.decide_sweep(wts, "/r/topo", lambda b: history.get(b), NOW)
         self.assertEqual([o["path"] for o in out], ["/r/.worktrees/topo-old"])
 
+    def test_a_simulator_is_in_use_by_a_run_or_a_build_naming_it_and_not_by_a_mention(self):
+        u = janitor.SIGNED_IN_SIMULATOR
+        procs = [(1, ["/opt/homebrew/bin/bash", "scripts/simulator-run.sh", "--send", "hi"]),
+                 (2, ["xcodebuild", "test", "-destination", "platform=iOS", f"Simulator,id={u}"]),
+                 (3, ["xcrun", "simctl", "launch", "--console-pty", u, "zone.hexagon.topo"]),
+                 (4, ["claude", "--name", "x", "Task:", "mend", "scripts/simulator-run.sh", "on", u]),
+                 (5, [f"/Users/b/Library/Developer/CoreSimulator/Devices/{u}/data/launchd_sim"]),
+                 (6, ["xcodebuild", "test", "-destination", "platform=iOS", "Simulator,id=OTHER"]),
+                 (7, ["xcodebuild", "test", "-destination", "platform=iOS", f"Simulator,id={u},OS=latest"]),
+                 (8, ["/bin/bash", "-e", "-o", "pipefail", "scripts/simulator-run.sh", "--send", "hi"]),
+                 (9, ["/usr/bin/env", "DEVICE=x", "bash", "/r/topo/scripts/simulator-run.sh"]),
+                 (10, ["claude", "scripts/simulator-run.sh", u]),
+                 (11, ["bash", "-c", "echo scripts/simulator-run.sh"]),
+                 (12, ["xcodebuild", "test", "-destination", "platform=iOS", f"Simulator,id={u}-2,OS=latest"]),
+                 (13, ["bash", "--rcfile", "/tmp/bashrc", "scripts/simulator-run.sh", "--send", "hi"]),
+                 (14, ["/bin/bash", "-eo", "pipefail", "scripts/simulator-run.sh"]),
+                 (15, ["env", "-u", "DEVICE", "bash", "--", "scripts/simulator-run.sh"]),
+                 (16, ["bash", "--rcfile", "scripts/simulator-run.sh", "other.sh"])]
+        self.assertEqual([int(x.split()[0]) for x in janitor.sim_users(u, procs)], [1, 2, 3, 7, 8, 9, 13, 14, 15])
+
+    def test_a_booted_simulator_nothing_uses_is_shut_once_it_has_stood_idle(self):
+        u = janitor.SIGNED_IN_SIMULATOR
+        dev = lambda udid=u, name="iPhone 17", state="Booted": {"udid": udid, "name": name, "state": state}
+        idle = lambda _u: []
+        # First sight of a boot no run stamped: its idle time starts now.
+        shut, seen = janitor.decide_simulators([dev()], {u}, {}, {}, idle, NOW)
+        self.assertEqual((shut, seen), ([], {u: NOW.isoformat()}))
+        # Seen booted SIM_IDLE ago and never used since: shut.
+        shut, seen = janitor.decide_simulators([dev()], {u}, {}, {u: ago(timedelta(minutes=31))}, idle, NOW)
+        self.assertEqual([d["udid"] for d in shut], [u])
+        # A run used it ten minutes ago: kept, whatever the first sight.
+        shut, _ = janitor.decide_simulators([dev()], {u}, {u: NOW - timedelta(minutes=10)}, {u: ago(timedelta(hours=5))}, idle, NOW)
+        self.assertEqual(shut, [])
+        # In use: kept, and its idle time starts again.
+        shut, seen = janitor.decide_simulators([dev()], {u}, {}, {u: ago(timedelta(hours=5))}, lambda _u: ["1 x"], NOW)
+        self.assertEqual((shut, seen), ([], {u: NOW.isoformat()}))
+        # Shut down: forgotten. Not a target, the agent's, or a suite's own: never shut.
+        shut, seen = janitor.decide_simulators([dev(state="Shutdown")], {u}, {}, {u: ago(timedelta(hours=5))}, idle, NOW)
+        self.assertEqual((shut, seen), ([], {}))
+        # A sign-in that stopped inside the half hour keeps its code screen up; an older one does not.
+        long = {u: ago(timedelta(hours=5))}
+        shut, _ = janitor.decide_simulators([dev()], {u}, {}, long, idle, NOW, {u: NOW - timedelta(minutes=10)})
+        self.assertEqual(shut, [])
+        shut, _ = janitor.decide_simulators([dev()], {u}, {}, long, idle, NOW, {u: NOW - timedelta(hours=2)})
+        self.assertEqual([d["udid"] for d in shut], [u])
+        long_ago = {x: ago(timedelta(hours=5)) for x in ("A", "B", "C")}
+        shut, _ = janitor.decide_simulators([dev("A"), dev("B", "Topo Agent"), dev("C", "topo-validate-unit-12")],
+                                            {"B", "C"}, {}, long_ago, idle, NOW)
+        self.assertEqual(shut, [])
+
     def test_an_untriaged_issue_past_the_grace_is_reported_and_a_triaged_one_is_not(self):
         issues = [issue(1, "Old", age=timedelta(hours=3)), issue(2, "Mine", labels=["from-topo", "bug"]),
                   issue(3, labels=["triaged"]), issue(4, comments=1), issue(5, age=timedelta(minutes=5))]
@@ -1236,6 +1286,15 @@ elif tool == "tmux":
         if S.get("tmux_stderr"): print(S["tmux_stderr"], file=sys.stderr); sys.exit(1)
         out(S["panes"])
     sys.exit(0)
+elif tool == "xcrun" and a[:3] == ["simctl", "list", "devices"]:
+    out({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": S.get("simulators", [])}})
+elif tool == "xcrun" and a[:2] == ["simctl", "shutdown"]:
+    sys.exit(0)
+elif tool == "ps":
+    # `ps_later` is the list from the pass's second read on: a run that began between them.
+    second = open(os.environ["FAKE_LOG"]).read().count("ps -axwwo") > 1
+    if second and S.get("ps_touch"): open(S["ps_touch"], "w").close()
+    out(S["ps_later"] if second and "ps_later" in S else S.get("ps", ""))
 elif tool == "curl":
     if "slots.json" in a[-1]:
         if S.get("slots_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
@@ -1325,7 +1384,7 @@ class WholePass(unittest.TestCase):
         self.addCleanup(lambda: subprocess.run(["rm", "-rf", self.work]))
         self.bin = os.path.join(self.work, "bin")
         os.makedirs(self.bin)
-        for tool in ("gh", "git", "tmux", "curl", "bash", "claude"):
+        for tool in ("gh", "git", "tmux", "curl", "bash", "claude", "xcrun", "ps"):
             p = os.path.join(self.bin, tool)
             with open(p, "w") as f:
                 f.write(FAKE)
@@ -1415,6 +1474,77 @@ class WholePass(unittest.TestCase):
         self.assertIn("swept worktree topo-old", got["body"]["text"])
         self.assertIn("killed tmux topo-old", got["body"]["text"])
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
+
+    def test_an_idle_signed_in_simulator_is_shut_and_one_in_use_is_left(self):
+        u = janitor.SIGNED_IN_SIMULATOR
+        sims = [{"udid": u, "name": "iPhone 17", "state": "Booted"}, {"udid": "AGENT", "name": "Topo Agent", "state": "Booted"}]
+        # The first pass sees the boot; nothing is shut inside SIM_IDLE.
+        p, calls = self.run_pass(self.scripted(simulators=sims))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("simctl shutdown", calls)
+        st = self.state_file()
+        st["simulators"][u] = ago(timedelta(minutes=40))
+        with open(self.state, "w") as f:
+            json.dump(st, f)
+        # In use by a run: left.
+        p, calls = self.run_pass(self.scripted(simulators=sims, ps="  12 /opt/homebrew/bin/bash scripts/simulator-run.sh --send hi"))
+        self.assertNotIn("simctl shutdown", calls)
+        st = self.state_file()
+        st["simulators"][u] = ago(timedelta(minutes=40))
+        with open(self.state, "w") as f:
+            json.dump(st, f)
+        # Idle: shut down, under simulator-run.sh's lock, and said.
+        p, calls = self.run_pass(self.scripted(simulators=sims, ps="  13 claude --name x scripts/simulator-run.sh"))
+        self.assertIn(f"xcrun simctl shutdown {u}", calls)
+        self.assertNotIn("simctl shutdown AGENT", calls)
+        self.assertTrue(os.path.exists(os.path.join(self.work, "Library", "Caches", "topo-sim", "mutex")))
+        self.assertTrue(any(f"shut down simulator iPhone 17 ({u})" in m["body"]["text"] for m in Bridge.received))
+
+    def idle_since(self, minutes):
+        st = self.state_file()
+        st.setdefault("simulators", {})[janitor.SIGNED_IN_SIMULATOR] = ago(timedelta(minutes=minutes))
+        with open(self.state, "w") as f:
+            json.dump(st, f)
+
+    def booted(self, **kw):
+        return self.scripted(simulators=[{"udid": janitor.SIGNED_IN_SIMULATOR, "name": "iPhone 17", "state": "Booted"}], **kw)
+
+    def test_a_simulator_held_by_its_lock_is_left(self):
+        self.idle_since(40)
+        simstate = os.path.join(self.work, "Library", "Caches", "topo-sim")
+        os.makedirs(simstate)
+        import fcntl
+        with open(os.path.join(simstate, "mutex"), "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            p, calls = self.run_pass(self.booted())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("simctl shutdown", calls)
+        self.assertIn("a run holds its lock", p.stdout + p.stderr)
+
+    def test_a_run_that_begins_after_the_first_read_is_seen_under_the_lock(self):
+        self.idle_since(40)
+        p, calls = self.run_pass(self.booted(ps="  13 /sbin/launchd", ps_later="  14 /bin/bash scripts/simulator-run.sh --send hi"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("ps -axwwo"), 2)
+        self.assertNotIn("simctl shutdown", calls)
+        started = janitor.parse_time(self.state_file()["simulators"][janitor.SIGNED_IN_SIMULATOR])
+        self.assertLess(abs(datetime.now(timezone.utc) - started), timedelta(minutes=5),
+                        "a user found under the lock starts the idle time again")
+
+    def test_a_use_or_a_stop_since_the_first_read_is_seen_under_the_lock(self):
+        simstate = os.path.join(self.work, "Library", "Caches", "topo-sim")
+        os.makedirs(simstate)
+        for stamp in ("last-use", "sign-in-stopped"):
+            open(self.log, "w").close()   # the fake counts this pass's reads of the processes alone
+            self.idle_since(40)
+            path = os.path.join(simstate, f"{janitor.SIGNED_IN_SIMULATOR}.{stamp}")
+            # The stamp lands as the second read of the processes is made: a run that used the
+            # device, or stopped a sign-in on it, and exited between the pass's two reads.
+            p, calls = self.run_pass(self.booted(ps="  13 /sbin/launchd", ps_touch=path))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(calls.count("ps -axwwo"), 2, stamp)
+            self.assertNotIn("simctl shutdown", calls, stamp)
+            os.remove(path)
 
     def test_a_stalled_pool_is_said_once_and_again_after_it_clears(self):
         stalled = self.scripted(
