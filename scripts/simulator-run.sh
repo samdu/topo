@@ -61,19 +61,19 @@
 # password, and CloudKit answers "temporarily unavailable"; a change of the account's password
 # ends it without a restart, with an Apple Account Verification alert. --renew signs the account out in
 # Settings and in again, typing the password once. A --send whose iCloud check answers "account
-# temporarily unavailable" renews it itself, once a run, as do a --talk and a launch to drive by
-# hand on a device the run booted, when a sign-in has passed on it since its last --erase
+# temporarily unavailable" renews it itself, once a run, as do a --talk, a --guest-turn and a launch
+# to drive by hand on a device the run booted, when a sign-in has passed on it since its last --erase
 # (<udid>.signed-in); each renewal is logged with why in ~/Library/Caches/topo-sim/renewals.log.
-# A sign-in that stopped is recorded there (<udid>.sign-in-stopped), and no run renews or shuts
-# down that device until a --sign-in passes, since a refused password typed again is how an
+# A sign-in that stopped is recorded there (<udid>.sign-in-stopped): no run renews that device until
+# a --sign-in passes, nor shuts it down within the half hour its code screen may stand, since a refused password typed again is how an
 # account is locked.
 #
 # A booted simulator holds gigabytes of the Mac's memory, so a run that used the device shuts it
 # down as it ends, passed or failed, signal included, unless something else is using it (another
 # simulator-run.sh, or an xcodebuild or simctl naming the udid) or the run leaves it up on
 # purpose: a launch with nothing to wait for (to drive by hand), a --sign-in, and a sign-in that
-# stopped (its code screen stays up for SIGNIN_CODE). The janitor shuts what is left once it has
-# stood idle (docs/janitor.md). The boot and the shutdown are made under one lock in
+# stopped in the last half hour (its code screen stays up for SIGNIN_CODE). The janitor shuts what is left once it has
+# stood idle (docs/janitor.md). Every boot, the check before a shutdown and --talk's reboot are made under one lock in
 # ~/Library/Caches/topo-sim (TOPO_SIM_STATE), with the device's last use beside it.
 # The password is typed through RedactedTyping, never XCTest's typeText, which writes what it
 # types into its activity's title and so into the run's output and the result bundle.
@@ -225,6 +225,12 @@ signedin="$simstate/$udid.signed-in"
 
 used_now() { touch "$simstate/$udid.last-use" 2>/dev/null || true; }
 
+# Whether a sign-in stopped on the device within the last half hour, in which time its code screen
+# may still be up for SIGNIN_CODE; an older stop still refuses a renewal, and keeps nothing up.
+stop_fresh() {
+  [ -e "$stopped" ] && [ $(( $(date +%s) - $(stat -f %m "$stopped" 2>/dev/null || echo 0) )) -lt 1800 ]
+}
+
 # The processes, other than this run and its children, using the device; one line each.
 others_using() {
   ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v me="$$" -v u="$udid" '
@@ -260,7 +266,7 @@ boot_device() {
 release_device() {
   [ "$touched" = yes ] || return 0
   used_now
-  [ -n "$leave" ] || [ ! -e "$stopped" ] || leave="a sign-in on it stopped, and its code screen may stand"
+  [ -n "$leave" ] || ! stop_fresh || leave="a sign-in on it stopped within the half hour, and its code screen may stand"
   if [ -n "$leave" ]; then
     echo "==> $udid is left booted: $leave. The janitor shuts it down once it has stood idle"
     return 0
@@ -706,7 +712,6 @@ renew_sign_in() {
   local why="$1" status=0
   if [ -e "$stopped" ]; then
     echo "==> $udid's iCloud sign-in has lapsed ($why), and an earlier sign-in on it stopped ($(cat "$stopped")), so this run types no password. Read why it stopped, then: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew (or SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in after a two-factor stop)" >&2
-    leave="its sign-in stopped earlier and is left as it stands"
     exit 1
   fi
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $udid $why ($root)" >>"$simstate/renewals.log"
@@ -770,7 +775,15 @@ if [ "$talk" = yes ]; then
     renew_after_boot "this run booted it, which ends its sign-in"
   else
     echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started"
-    xcrun simctl shutdown "$udid" 2>/dev/null || true
+    { lockf -s -t 120 7 || { echo "==> another run has held $simstate/mutex for 2 minutes" >&2; exit 1; }
+      users="$(others_using)"
+      if [ -n "$users" ]; then
+        echo "==> $udid booted before coreaudiod started and has to be rebooted to hear the lane, but these runs are using it; run --talk once they are done:" >&2
+        printf '%s\n' "$users" | sed 's/^/      /' >&2
+        exit 1
+      fi
+      xcrun simctl shutdown "$udid" 7>&- 2>/dev/null || true
+    } 7>"$simstate/mutex"
     boot_device
     renew_after_boot "this run rebooted it, which ends its sign-in"
   fi
@@ -835,10 +848,11 @@ if [ "$fresh" = yes ]; then
   xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
 fi
 xcrun simctl install "$udid" "$app"
-# A launch to drive by hand has no iCloud check to find a lapse at, so one on a device this run
-# booted is renewed first. A guest command or guest turn reaches no CloudKit; a --send renews at
-# its check.
-if [ -z "$send$userland$guestturn" ] && [ "$booted_here" = yes ]; then
+# A launch to drive by hand or for guest turns has no iCloud check to find a lapse at, and the
+# role it decides from CloudKit's records can sign the launch out (a viewer's arrival), which the
+# resident refuses to start under; so one on a device this run booted is renewed first. A guest
+# command alone needs no sign-in; a --send renews at its check.
+if [ -z "$send$userland" ] && [ "$booted_here" = yes ]; then
   renew_after_boot "this run booted it, which ends its sign-in"
 fi
 

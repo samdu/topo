@@ -656,6 +656,19 @@ reboot_case talk-booted-since-audio  "Sat Nov 14 13:32:28 2026" "shutdown"      
 # The renewal's own boot finds the device up.
 reboot_case talk-booted-before-audio "Mon Nov  9 09:05:01 2026" "shutdown boot boot shutdown" yes
 reboot_case talk-shut-down           ""                         "boot boot shutdown"          yes
+# A reboot under another run using the device is refused, and the device is left to it.
+: >"$work/simctl.calls"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LANE_START=0 FAKE_LAUNCH=silent FAKE_SIMCTL_CALLS="$work/simctl.calls" \
+  FAKE_SIM_BOOTED="Mon Nov  9 09:05:01 2026" FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" \
+  FAKE_PS_LIST="  999     1 /opt/homebrew/bin/bash scripts/simulator-run.sh --send hi" \
+  "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk-reboot-in-use.out" 2>&1 </dev/null
+status=$?
+if [ "$status" = 1 ] && ! grep -qx 'shutdown\|boot' "$work/simctl.calls" && grep -q "these runs are using it" "$work/talk-reboot-in-use.out"; then
+  echo "ok   talk-reboot-in-use: refused, and neither shut down nor booted"
+else
+  echo "FAIL talk-reboot-in-use: exit $status, simctl: $(tr '\n' ' ' <"$work/simctl.calls")"
+  sed 's/^/    | /' "$work/talk-reboot-in-use.out" | grep -vF "$token"; failures=$((failures + 1))
+fi
 # A device with no sign-in recorded since its last --erase is not signed in for the first time.
 rm -f "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
 reboot_case talk-never-signed-in     ""                         "boot shutdown"               no
@@ -955,7 +968,8 @@ sim_case sim-mention-is-no-run        pass yes "" 0 FAKE_LAUNCH=answered \
 touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
 sim_case sim-hand-launch-keeps        pass no "driven by hand" 0 FAKE_LAUNCH=launched --
 sim_case sim-hand-launch-renews       pass no "driven by hand" 1 FAKE_LAUNCH=launched FAKE_SIM_BOOTS=fresh --
-sim_case sim-guest-turn-renews-none   pass yes "" 0 FAKE_LAUNCH=guest-answered FAKE_SIM_BOOTS=fresh -- --guest-turn "a || b"
+sim_case sim-guest-turn-renews        pass yes "renewing it" 1 FAKE_LAUNCH=guest-answered FAKE_SIM_BOOTS=fresh -- --guest-turn "a || b"
+sim_case sim-userland-renews-none     pass yes "" 0 FAKE_LAUNCH=userland-fetched FAKE_SIM_BOOTS=fresh -- --userland "echo hi"
 sim_case sim-sign-in-keeps            pass no "signed in for the runs after this one" 1 FAKE_LAUNCH=silent -- --sign-in
 rm -f "$TOPO_SIM_STATE/renewals.log"
 sim_case sim-renews-and-relaunches    pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello
@@ -972,6 +986,10 @@ sim_case sim-renewal-stops            fail no "SIGNIN_CODE=<code> DEVICE=FAKE-UD
   FAKE_LAUNCH=unavailable FAKE_SIGNIN_STOPS=1 -- --send hello
 sim_case sim-no-renewal-past-a-stop   fail no "so this run types no password" 0 FAKE_LAUNCH=unavailable -- --send hello
 sim_case sim-stop-keeps-the-device    pass no "a sign-in on it stopped" 0 FAKE_LAUNCH=userland-fetched -- --userland "echo hi"
+# A stop older than the half hour keeps nothing up, and still refuses a renewal.
+touch -t "$(date -v-2H +%Y%m%d%H%M)" "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+sim_case sim-old-stop-shuts           pass yes "" 0 FAKE_LAUNCH=userland-fetched -- --userland "echo hi"
+sim_case sim-old-stop-still-refuses   fail yes "so this run types no password" 0 FAKE_LAUNCH=unavailable -- --send hello
 sim_case sim-sign-in-clears-the-stop  pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
 [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" ] \
   && sim_case sim-renews-after-the-stop pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello \
