@@ -824,14 +824,16 @@ final class ConnectionsScreenshots: XCTestCase {
         /// the sign up, come on it too, so it is looked at twice a second.
         var lean: CGFloat?
         func placed(_ why: String) async throws -> (window: AboveSheetsWindow, box: CGRect, image: UIImage) {
-            var last = CGRect.null
+            var last = CGRect.null, guide = CGRect.null
             do {
                 try await until("placed him \(why)", seconds: 30, every: .milliseconds(500)) {
                     guard let window = above(), window.frame == scene.coordinateSpace.bounds else { return false }
                     last = try drawing(window).box
                     let top = window.safeAreaInsets.top + Look().settings.signOverPageTop
-                    let off = last.midX - window.safeAreaLayoutGuide.layoutFrame.midX
-                    return abs(last.minY - top) <= 2 && (lean.map { abs(off - $0) <= 2 } ?? (abs(off) <= 24))
+                    guide = window.safeAreaLayoutGuide.layoutFrame
+                    let off = last.midX - guide.midX
+                    // His arms move as he breathes, which moves what is drawn a few points.
+                    return abs(last.minY - top) <= 2 && (lean.map { abs(off - $0) <= 8 } ?? (abs(off) <= 24))
                 }
             } catch let missed as Missed {
                 if let window = above() {
@@ -843,7 +845,7 @@ final class ConnectionsScreenshots: XCTestCase {
                         try await Task.sleep(for: .seconds(1))
                     }
                 }
-                XCTFail("\(missed.what): drawn at \(last)")
+                XCTFail("\(missed.what): drawn at \(last) in the safe area \(guide), lean \(String(describing: lean))")
                 throw missed
             }
             let window = try XCTUnwrap(above())
