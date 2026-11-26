@@ -331,8 +331,9 @@ final class ConnectionsTests: XCTestCase {
         let short = GitHubSignOverPage.top(board: board, wanted: 400, picture: picture, room: 330)
         XCTAssertEqual(short + picture, 330, "his picture's foot is past the screen's")
         XCTAssertGreaterThanOrEqual(short + board, 0, "his board is over the screen's top")
-        XCTAssertEqual(GitHubSignOverPage.top(board: board, wanted: 84, picture: picture, room: 100), -board,
-                       "on a screen shorter than he is, the board is not kept at its top")
+        let tiny = GitHubSignOverPage.top(board: board, wanted: 84, picture: picture, room: 100)
+        XCTAssertEqual(tiny + picture, 100, "on a screen shorter than his picture, his foot is not at the screen's")
+        XCTAssertGreaterThanOrEqual(tiny + board, 0, "on a screen shorter than his picture, his board is over its top")
     }
 
     /// Over GitHub's page a touch is his only on a drawn pixel of him, inside his frame, once he
