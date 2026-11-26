@@ -1048,10 +1048,11 @@ struct MascotRoam: Equatable, Sendable {
     var swimming: Bool { move != nil || ball != nil }
     /// The pose of the stroke he is in: the scrunch while he is a ball; nil while he is not swimming.
     var phase: MascotSwim.Phase? { move?.phase ?? (ball != nil ? .open : nil) }
-    /// The way he is going, which his head leads along; nil while he is not under way.
-    /// The way the swim goes, none for a swim of no length, which has no way for his head to lead.
+    /// The way the swim goes, which his head leads along: none while he is not under way, through
+    /// the scrunch a swim starts at (`MascotSwim.leads`), or for a swim of no length, which has no
+    /// way for his head to lead.
     var course: CGVector? {
-        guard let move, hypot(move.to.x - move.from.x, move.to.y - move.from.y) > 0.5 else { return nil }
+        guard let move, move.swim.leads, hypot(move.to.x - move.from.x, move.to.y - move.from.y) > 0.5 else { return nil }
         return CGVector(dx: move.to.x - move.from.x, dy: move.to.y - move.from.y)
     }
     /// There is something the clock has to move on: a swim, a ball, or a decision waiting on the quiet.

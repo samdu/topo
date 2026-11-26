@@ -678,11 +678,15 @@ final class MascotGeometryTests: XCTestCase {
                     let heading = CGVector(dx: 300 * cos(angle), dy: 300 * sin(angle))
                     // Settled into the pose he swims from, and upright.
                     for _ in 0..<60 { frame(from, course: nil) }
-                    // The ball, with nowhere yet to go.
-                    for _ in 0..<18 { frame(MascotSwim.Phase.open.rawValue, course: nil) }
-                    // The shot, hurried, from the ball; halfway there a kick a third of a turn off.
+                    // From the ball, held as long as the roam holds it before the shot, then from
+                    // the pose itself, a placed swim turning him at once.
+                    for scrunched in [true, false] {
+                    if scrunched {
+                        for _ in 0...Int((MascotRoam.scrunchMin / dt).rounded(.up)) { frame(MascotSwim.Phase.open.rawValue, course: nil) }
+                    }
+                    // The shot, hurried; halfway there a kick a third of a turn off.
                     var swim = MascotSwim(from: .zero, to: CGPoint(x: heading.dx, y: heading.dy), stride: 93, pace: 1.7,
-                                          scrunched: true)
+                                          scrunched: scrunched)
                     let kickAt = swim.elapsed + swim.duration / 2
                     var kicked = false
                     while !swim.done {
@@ -692,7 +696,7 @@ final class MascotGeometryTests: XCTestCase {
                             swim = MascotSwim(from: here, to: CGPoint(x: here.x + 200 * cos(turn), y: here.y + 200 * sin(turn)),
                                               stride: 93, pace: 1.7, scrunched: true)
                         }
-                        frame(swim.phase.rawValue, course: swim.heading)
+                        frame(swim.phase.rawValue, course: swim.leads ? swim.heading : nil)
                         swim.elapsed += dt
                     }
                     // Arrived, he rights himself in the glide, his arms coming in to straight behind
@@ -706,6 +710,7 @@ final class MascotGeometryTests: XCTestCase {
                         if righting >= 120 { break }
                     }
                     for _ in 0..<60 { frame(from, course: nil) }
+                    }
                 }
             }
             return (CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0), frames)

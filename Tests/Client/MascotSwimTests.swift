@@ -70,7 +70,8 @@ final class MascotSwimTests: XCTestCase {
     /// — and every point of the rest of it is on the way from there to the new end; in its coast,
     /// with no stroke left, it is a stroke from the shot, from where he is.
     func testARetargetedSwimKeepsHimWhereHeIs() {
-        for elapsed in [0.4, 1.5, 3.4] {
+        // 0.28 s is late in the scrunch, where its speed dips below nothing.
+        for elapsed in [0.28, 0.3, 0.4, 1.5, 3.4] {
             var move = MascotRoam.Move(from: .zero, to: CGPoint(x: 0, y: 300), stride: 93)
             move.swim.elapsed = elapsed
             let here = CGPoint(x: move.point.x + 3, y: move.point.y - 7), end = CGPoint(x: 40, y: 310)

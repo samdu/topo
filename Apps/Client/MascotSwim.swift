@@ -74,8 +74,11 @@ struct MascotSwim: Equatable, Sendable {
     }
 
     /// How far along the way from `from` to `to` he is `elapsed` seconds into the swim, 0 to 1.
+    /// The scrunch's speed dips a little below nothing just before the shot, as the mockup's has
+    /// it, so a swim bent there would carry him back past where it was bent: he is held there
+    /// until the stroke carries him on, and goes nowhere off the way.
     func fraction(at elapsed: Double) -> Double {
-        (carried(at: elapsed) - start) / (1 - start)
+        (max(carried(at: elapsed), start) - start) / (1 - start)
     }
 
     /// The same swim from `here`, where he is drawn, to `to`: what is left of its strokes carries
@@ -105,6 +108,11 @@ struct MascotSwim: Equatable, Sendable {
 
     var point: CGPoint { at(elapsed).point }
     var phase: Phase { at(elapsed).phase }
+
+    /// Whether his head leads yet: not through the scrunch a swim starts at, which he balls up into
+    /// upright as he does from a standstill, and from the shot on. A swim that starts at the shot
+    /// leads from its first frame.
+    var leads: Bool { start > 0 || elapsed >= Self.open / pace }
 
     /// The way he goes, as a vector, which his head leads along.
     var heading: CGVector { CGVector(dx: to.x - from.x, dy: to.y - from.y) }

@@ -369,9 +369,10 @@ final class MascotDriverTests: XCTestCase {
         for _ in 0..<30 { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.driver.input.activity, "thinking")
         let before = try XCTUnwrap(canvas.roam?.position)
-        // A turn lands where he stands: he goes, swimming.
+        // A turn lands over him and everything to his right: he goes, swimming to the left, so
+        // his head leads round and he has to right himself after.
         var landed = Self.open
-        landed.obstacles = [CGRect(x: 0, y: before.y - 20, width: 400, height: 600 - before.y + 20)]
+        landed.obstacles = [CGRect(x: before.x - 20, y: 0, width: 400, height: 700)]
         apply(landed)
         var swam = false
         var worn: Set<String> = []
@@ -400,6 +401,7 @@ final class MascotDriverTests: XCTestCase {
                 off = now
             }
         }
+        XCTAssertGreaterThan(righting, 0, "he arrived upright, so nothing of his righting was seen")
         XCTAssertEqual(canvas.lean.angle, 0, "never upright")
         if let off { XCTAssertLessThan(off, 5, "upright with his arms \(off)° from straight behind him") }
         XCTAssertEqual(canvas.driver.input.activity, "thinking", "the swim put him back to something else")

@@ -19,16 +19,21 @@ final class MascotRoamTests: XCTestCase {
                     well: CGRect(x: 165, y: 544, width: 72, height: 72))
     }
 
-    /// A roam placed over `field` and left to settle.
-    private func settled(_ field: MascotField, _ settings: MascotRoam.Settings = settings) -> (MascotRoam, Double) {
-        var roam = MascotRoam(settings, frame: Self.frame)
+    /// A roam placed over `field` and left to settle, at `frame`.
+    static func settled(_ field: MascotField, _ settings: MascotRoam.Settings = settings,
+                        frame: Double = frame) -> (MascotRoam, Double) {
+        var roam = MascotRoam(settings, frame: frame)
         roam.observe(field, at: 0)
         var time = 0.0
         while roam.needsTime, time < 60 {
-            time += Self.frame
+            time += frame
             roam.advance(to: time)
         }
         return (roam, time)
+    }
+
+    private func settled(_ field: MascotField, _ settings: MascotRoam.Settings = settings) -> (MascotRoam, Double) {
+        Self.settled(field, settings)
     }
 
     /// Whatever he is drawn over, frame by frame: he is covered exactly when anything he may not

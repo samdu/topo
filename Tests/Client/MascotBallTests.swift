@@ -12,15 +12,9 @@ final class MascotBallTests: XCTestCase {
     static let frame = 1.0 / 60
 
     private func settled(_ field: MascotField, _ settings: MascotRoam.Settings = settings) -> (MascotRoam, Double) {
-        var roam = MascotRoam(settings, frame: Self.frame)
-        roam.observe(field, at: 0)
-        var time = 0.0
-        while roam.needsTime, time < 60 {
-            time += Self.frame
-            roam.advance(to: time)
-        }
-        XCTAssertNotNil(roam.position)
-        return (roam, time)
+        let settled = MascotRoamTests.settled(field, settings, frame: Self.frame)
+        XCTAssertNotNil(settled.0.position)
+        return settled
     }
 
     /// On the real geometry, where he is: his reach inside his room's width and above the pane,
