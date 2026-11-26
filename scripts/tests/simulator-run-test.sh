@@ -64,6 +64,8 @@ case "$2" in
     # The launcher's pid, for the test to hold that no run leaves one behind, and one line a launch.
     echo "$$" >"$FAKE_LAUNCHER_PID"
     echo "run=${SIMCTL_CHILD_TOPO_DEBUG_RUN:-} nonce=${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_NONCE:-} port=${SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT:-}" >>"${FAKE_LAUNCHES:-/dev/null}"
+    # Another run's sign-in passing while this launch runs, once.
+    if [ -n "${FAKE_LAUNCH_SIGNS:-}" ] && [ ! -e "$FAKE_LAUNCH_SIGNS.done" ]; then uuidgen >"$FAKE_LAUNCH_SIGNS"; touch "$FAKE_LAUNCH_SIGNS.done"; fi
     # What the launch carries, which is what the simulator's log records, and the token the app
     # reads at launch from the port and nonce it was handed, unless FAKE_APP_UNREAD says it never asks.
     [ -z "${FAKE_LAUNCH_ENV:-}" ] || { echo "$*"; env; } >"$FAKE_LAUNCH_ENV"
@@ -224,6 +226,8 @@ cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
 echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
 [ -z "${FAKE_BUILD_ENV:-}" ] || env >>"$FAKE_BUILD_ENV"
+# Another run's sign-in passing while the suite runs.
+case " $* " in *" -only-testing:TopoUITests"*) [ -z "${FAKE_UI_SIGNS:-}" ] || uuidgen >"$FAKE_UI_SIGNS" ;; esac
 # The leak check's test: it reads the dummy as the real one does, and records it as XCTest's
 # typeText does (its first 18 characters in the output and the bundle) for the control, and for
 # the redacted route only when FAKE_LEAK_REDACTED says the route leaks.
@@ -261,6 +265,8 @@ esac
 case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
+  # Another run in the worktree starting, which begins the run's log afresh.
+  [ -z "${FAKE_SIGNIN_TRUNCATES:-}" ] || : >"$FAKE_SIGNIN_TRUNCATES"
   # A sign-in still in Settings when the case signals the run.
   [ -z "${FAKE_SIGNIN_HANGS:-}" ] || { touch "$FAKE_SIGNIN_HANGS"; exec /bin/sleep 30; }
   # A sign-in that leaves a process of its own behind, as a build service outliving xcodebuild would.
@@ -335,7 +341,18 @@ c() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/^Sat/sam./; s/^Mon/lun./; 
 case "$*" in
   # The process list: launchd and what FAKE_PS_LIST adds, or with FAKE_PS_FAILS no list at all.
   "-axwwo pid=,ppid=,command=") [ -z "${FAKE_PS_FAILS:-}" ] || exit 1
-                                echo "    1     0 /sbin/launchd"; [ -z "${FAKE_PS_LIST:-}" ] || printf '%s\n' "$FAKE_PS_LIST" ;;
+                                echo "    1     0 /sbin/launchd"; [ -z "${FAKE_PS_LIST:-}" ] || printf '%s\n' "$FAKE_PS_LIST"
+                                # The run itself and everything under it, as a real list shows them,
+                                # which the run is to leave out of what is using the device.
+                                /bin/ps -axwwo pid=,ppid=,command= | awk -v me="$$" '
+                                  { pid[NR] = $1; ppid[NR] = $2; line[NR] = $0; at[$1] = NR }
+                                  END {
+                                    for (p = me; p in at; p = ppid[at[p]]) if (line[at[p]] ~ /simulator-run\.sh/ && line[at[p]] !~ /simulator-run-test\.sh/) top = p
+                                    if (!top) exit
+                                    mine[top] = 1
+                                    do { grew = 0; for (i = 1; i <= NR; i++) if (!(pid[i] in mine) && (ppid[i] in mine)) { mine[pid[i]] = 1; grew = 1 } } while (grew)
+                                    for (i = 1; i <= NR; i++) if (pid[i] in mine && pid[i] != me) print line[i]
+                                  }' ;;
   "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " | c ;;
   "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " | c ;;
   *) exit 1 ;;
@@ -1071,7 +1088,7 @@ rm -f "$work/sim-renewal-waits-its-turn.out"
 lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "for _ in \$(seq 600); do grep -q 'another run is signing' '$work/sim-renewal-waits-its-turn.out' 2>/dev/null && break; /bin/sleep 0.1; done; touch '$TOPO_SIM_STATE/FAKE-UDID.signed-in'" &
 holder=$!
 for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
-sim_case sim-renewal-waits-its-turn   pass yes "the run this one waited for renewed it" 0 FAKE_LAUNCH=unavailable-then-answered -- --send hello
+sim_case sim-renewal-waits-its-turn   pass yes "another run's sign-in has renewed it" 0 FAKE_LAUNCH=unavailable-then-answered -- --send hello
 wait "$holder"
 # A --sign-in that waited for another run's sign-in types nothing over what that one left.
 for outcome in passed stopped; do
@@ -1088,6 +1105,47 @@ for outcome in passed stopped; do
   wait "$holder"
 done
 rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped
+# A sign-in that passed after this run launched, before its renewal took the lock, is seen.
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped "$work/launch-signs.done"
+sim_case sim-renewal-sees-a-sign-in-since-launch pass yes "another run's sign-in has renewed it" 0 \
+  FAKE_LAUNCH=unavailable-then-answered "FAKE_LAUNCH_SIGNS=$TOPO_SIM_STATE/FAKE-UDID.signed-in" -- --send hello
+# A --sign-in behind one that found the device signed in already and put an old stop back reads
+# that stop as the one it was, not a new one, and signs in.
+echo "stopped long ago" >"$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+touch -t "$(date -v-2H +%Y%m%d%H%M)" "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+rm -f "$work/sim-sign-in-behind-a-put-back.out"
+stop="$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "ln '$stop' '$stop.prior'; echo begun >'$stop.new'; mv -f '$stop.new' '$stop'; for _ in \$(seq 600); do grep -q 'another run is signing' '$work/sim-sign-in-behind-a-put-back.out' 2>/dev/null && break; /bin/sleep 0.1; done; mv -f '$stop.prior' '$stop'" &
+holder=$!
+for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
+sim_case sim-sign-in-behind-a-put-back pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
+wait "$holder"
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped*
+# A --sign-in waiting on one a signal ends finds that one's record as it began, and types nothing.
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped* "$work/sim-sign-in-behind-a-signal.out"
+lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "echo '2026-11-26T00:00:00Z in x: begun and not seen to finish; see y' >'$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped'; for _ in \$(seq 600); do grep -q 'another run is signing' '$work/sim-sign-in-behind-a-signal.out' 2>/dev/null && break; /bin/sleep 0.1; done" &
+holder=$!
+for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
+sim_case sim-sign-in-behind-a-signal fail no "Read why it stopped" 0 FAKE_LAUNCH=silent -- --sign-in
+wait "$holder"
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped*
+# A --press-mic that boots learns of the lapse at that boot; a sign-in passing during its suite is seen.
+touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
+sim_case sim-press-mic-sees-a-sign-in pass no "another run's sign-in has renewed it" 0 FAKE_LAUNCH=launched FAKE_SIM_BOOTS=fresh \
+  "FAKE_UI_SIGNS=$TOPO_SIM_STATE/FAKE-UDID.signed-in" -- --press-mic
+# A boot the sign-in cannot make under the lock types nothing and puts the records back.
+echo "stopped earlier" >"$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+lockf "$TOPO_SIM_STATE/mutex" /bin/sleep 5 &
+holder=$!
+for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/mutex" true 2>/dev/null || break; /bin/sleep 0.1; done
+sim_case sim-sign-in-unbooted-types-nothing fail no "nothing was typed" 0 FAKE_LAUNCH=silent TOPO_SIM_LOCK_WAIT=1 -- --sign-in
+wait "$holder"
+if [ "$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)" = "stopped earlier" ]; then
+  echo "ok   sim-sign-in-unbooted-keeps-the-stop: the stop that stood is back"
+else
+  echo "FAIL sim-sign-in-unbooted-keeps-the-stop: stop '$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)'"; failures=$((failures + 1))
+fi
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped*
 # What a sign-in leaves running holds no sign-in lock: the next renewal finds it free.
 rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
 sim_case sim-sign-in-lock-not-inherited pass no "" 1 FAKE_LAUNCH=silent FAKE_SIGNIN_LEAVES=1 -- --sign-in
@@ -1101,6 +1159,7 @@ echo "stopped earlier" >"$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"; rm -f "$TOP
 touch -t "$(date -v-2H +%Y%m%d%H%M)" "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
 stop_time="$(stat -f %m "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped")"
 FAKE_SIGNIN_SAYS="[sign-in] already signed in as buddy.durose@icloud.com, and nothing asks for the password" \
+  FAKE_SIGNIN_TRUNCATES="$work/root/build/sim/simulator-run.log" \
   sim_case sim-already-signed-in-mends-nothing pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
 if [ "$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)" = "stopped earlier" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.signed-in" ] \
    && [ "$(stat -f %m "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped")" = "$stop_time" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped.prior" ]; then
