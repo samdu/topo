@@ -399,6 +399,23 @@ final class ConnectionsTests: XCTestCase {
         }
     }
 
+    /// The speed he swims up over the page at is read within its bounds, since the swim's length
+    /// is the distance over it: a speed near nothing is a swim that never arrives.
+    func testTheSignOverThePagesSpeedIsReadWithinItsBounds() {
+        func read(_ speed: Double) -> Look.Settings {
+            LookDocument.read(#"{"settings": {"signOverPageSpeed": \#(speed), "copiedPause": 1.5}}"#).look.settings
+        }
+        let compiled = Look().settings
+        for speed in [60.0, 2000.0] {
+            XCTAssertEqual(read(speed).signOverPageSpeed, speed, accuracy: 0.0001)
+        }
+        for speed in [0.0, 59.0, 2001.0, -240.0] {
+            let settings = read(speed)
+            XCTAssertEqual(settings.signOverPageSpeed, compiled.signOverPageSpeed, "a speed of \(speed) was taken")
+            XCTAssertEqual(settings.copiedPause, 1.5, accuracy: 0.0001, "a refused field took another with it")
+        }
+    }
+
     /// The sign hands its tap the look's pause: the compiled 0.9 seconds, or a document's.
     func testTheSignsTapWaitsTheLooksPause() {
         XCTAssertEqual(GitHubCodeSign.pause(Look().settings), .milliseconds(900))

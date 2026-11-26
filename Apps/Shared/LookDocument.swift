@@ -318,6 +318,8 @@ enum LookDocument {
         // bar's close button is never under it.
         r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...1.7)
         r.bounded("signOverPageTop", &value.signOverPageTop, in: Look.Settings.signOverPageTopRange)
+        // A divisor of the swim's length, so never near nothing.
+        r.bounded("signOverPageSpeed", &value.signOverPageSpeed, in: Look.Settings.signOverPageSpeedRange)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
