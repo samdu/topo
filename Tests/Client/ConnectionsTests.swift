@@ -335,7 +335,7 @@ final class ConnectionsTests: XCTestCase {
         seen.image = try XCTUnwrap(context.makeImage())
         seen.frame = CGRect(x: 100, y: 200, width: 40, height: 20)
         XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 210)), "a touch was his before he was in his place")
-        seen.settled = true
+        seen.swim(from: 0, seconds: nil)
         XCTAssertTrue(seen.takes(CGPoint(x: 110, y: 210)), "a touch on him was the page's")
         XCTAssertFalse(seen.takes(CGPoint(x: 130, y: 210)), "a touch on nothing drawn in his frame was his")
         XCTAssertFalse(seen.takes(CGPoint(x: 90, y: 210)), "a touch outside his frame was his")

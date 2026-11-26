@@ -36,6 +36,9 @@ struct ConnectionsView: View {
             // foot, he swims up over the page and holds the code there too: a touch on him copies
             // it and opens nothing, and every other touch is the page's.
             .background(AboveSheets(content: overPage, takes: { [seen] in seen.takes($0) }))
+            .onChange(of: connections.codeOverPage == nil) { _, gone in
+                if gone { seen.leave() }
+            }
             .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -351,8 +354,7 @@ struct GitHubCodeSign: View {
 /// to his place, the top of the sign's board `look.settings.signOverPageTop` points under the
 /// safe area's top and centred, below the browser's bar on an iPhone, and only there takes the
 /// sign up, saying Copied a while before it shows the code. Under Reduce Motion he is put there.
-/// He swims as the sheet's own window does not move, so nothing of the page is his until he is
-/// in his place (`SignSeen.settled`).
+/// Nothing of the page is his until he is in his place (`SignSeen.arrived`).
 struct GitHubSignOverPage: View {
     let code: String
     let copies: Int
@@ -361,11 +363,7 @@ struct GitHubSignOverPage: View {
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(Mascot.self) private var mascot
-    /// Points below his place he is drawn at; nil before he has begun, which is the screen's foot.
-    @State private var below: CGFloat?
-    @State private var arrived = false
     @State private var boardTop: Int?
-    @State private var swimming: Task<Void, Never>?
 
     var body: some View {
         let scale = look.settings.signOverPageScale
@@ -374,56 +372,59 @@ struct GitHubSignOverPage: View {
         let top = look.settings.signOverPageTop - CGFloat(board) * scale
         GeometryReader { proxy in
             let foot = proxy.size.height + proxy.safeAreaInsets.bottom - top
-            GitHubCodeSign(code: code, raised: arrived, copies: copies, scale: scale, hint: "Copies the code",
+            GitHubCodeSign(code: code, raised: seen.arrived, copies: copies, scale: scale, hint: "Copies the code",
                            identifier: "github-code-sign-over-page", overPage: true, seen: seen) { _ in copy() }
                 .frame(width: size.width, height: size.height)
                 .position(x: proxy.size.width / 2, y: top + size.height / 2)
-                .offset(y: below ?? foot)
+                .offset(y: seen.below ?? foot)
                 .onAppear {
                     if boardTop == nil { boardTop = board }
-                    swim(from: foot)
+                    seen.swim(from: foot, seconds: reduceMotion || foot <= 0 ? nil : foot / look.mascot.swimSpeed)
                 }
         }
-        .onDisappear {
-            swimming?.cancel()
-            seen.settled = false
-        }
-    }
-
-    /// The swim is SwiftUI's animation, drawn at the display's rate; he arrives when its time is
-    /// up, by the clock, rather than at its completion, which a window not on the screen never
-    /// reports.
-    private func swim(from foot: CGFloat) {
-        guard below == nil else { return }
-        guard !reduceMotion, foot > 0 else {
-            below = 0
-            arrive()
-            return
-        }
-        let seconds = foot / look.mascot.swimSpeed
-        withAnimation(.easeInOut(duration: seconds)) { below = 0 }
-        swimming = Task {
-            do { try await Task.sleep(for: .milliseconds(Int(seconds * 1000))) } catch { return }
-            arrive()
-        }
-    }
-
-    private func arrive() {
-        arrived = true
-        seen.settled = true
     }
 }
 
 /// Where Topo over GitHub's page is drawn and the last picture of him, in his window's points,
 /// so the window takes a touch on a pixel of him or his sign once he is in his place and passes
 /// every other touch to the page.
-@MainActor final class SignSeen {
-    var frame = CGRect.null
-    var image: CGImage?
-    var settled = false
+@Observable @MainActor final class SignSeen {
+    @ObservationIgnored var frame = CGRect.null
+    @ObservationIgnored var image: CGImage?
+    /// He is in his place, holding the sign up.
+    private(set) var arrived = false
+    /// Points below his place he is drawn at; nil before his swim has begun, which is the foot.
+    private(set) var below: CGFloat?
+    @ObservationIgnored private var swimming: Task<Void, Never>?
+
+    /// Swims him up from `foot` points below his place over `seconds`, SwiftUI's animation and
+    /// so drawn at the display's rate, and has him arrive when its time is up, by the clock; with
+    /// no seconds he is put there. A swim begun stands until he leaves: it lives here, not in the
+    /// view, which the window above the sheet may build again under it.
+    func swim(from foot: CGFloat, seconds: Double?) {
+        guard below == nil else { return }
+        guard let seconds else {
+            below = 0
+            arrived = true
+            return
+        }
+        withAnimation(.easeInOut(duration: seconds)) { below = 0 }
+        swimming = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(Int(seconds * 1000))) } catch { return }
+            self?.arrived = true
+        }
+    }
+
+    /// The page has gone: the next one he swims up over again.
+    func leave() {
+        swimming?.cancel()
+        swimming = nil
+        arrived = false
+        below = nil
+    }
 
     func takes(_ point: CGPoint) -> Bool {
-        guard settled, frame.contains(point), frame.width > 0, frame.height > 0, let image else { return false }
+        guard arrived, frame.contains(point), frame.width > 0, frame.height > 0, let image else { return false }
         return Self.drawn(image, at: CGPoint(x: (point.x - frame.minX) / frame.width, y: (point.y - frame.minY) / frame.height))
     }
 
