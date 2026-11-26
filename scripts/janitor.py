@@ -1482,7 +1482,7 @@ class Shell:
     def processes(self):
         """Every process as (pid, argv split on whitespace)."""
         out = []
-        for l in self.run(["ps", "-axo", "pid=,command="]).stdout.splitlines():
+        for l in self.run(["ps", "-axwwo", "pid=,command="]).stdout.splitlines():
             f = l.split()
             if len(f) > 1 and f[0].isdigit():
                 out.append((int(f[0]), f[1:]))
@@ -2094,12 +2094,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 state["simulators"].pop(d["udid"], None)
                 lines.append(f"shut down simulator {name}: booted with nothing using it for {minutes(d['idle'])}.")
                 persist()
-            except RuntimeError as ex:
+            except (RuntimeError, OSError) as ex:
                 say(f"simulator:{d['udid']}", f"simulator {name} would not shut down: {ex}")
             finally:
                 if lock:
                     lock.close()
-    except RuntimeError as ex:
+    except (RuntimeError, OSError) as ex:
         say("simulators:read", f"could not read the simulators: {ex}")
 
     # 6: the open issues nobody has triaged.

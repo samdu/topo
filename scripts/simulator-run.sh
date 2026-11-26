@@ -61,10 +61,12 @@
 # password, and CloudKit answers "temporarily unavailable"; a change of the account's password
 # ends it without a restart, with an Apple Account Verification alert. --renew signs the account out in
 # Settings and in again, typing the password once. A --send whose iCloud check answers "account
-# temporarily unavailable", and a --talk that booted the device, renew it themselves, once a run,
-# and logged with why in ~/Library/Caches/topo-sim/renewals.log; a sign-in that stopped is
-# recorded there (<udid>.sign-in-stopped) and no run renews that device again until a --sign-in
-# passes, since a refused password typed again is how an account is locked.
+# temporarily unavailable" renews it itself, once a run, as do a --talk and a launch to drive by
+# hand on a device the run booted, when a sign-in has passed on it since its last --erase
+# (<udid>.signed-in); each renewal is logged with why in ~/Library/Caches/topo-sim/renewals.log.
+# A sign-in that stopped is recorded there (<udid>.sign-in-stopped), and no run renews or shuts
+# down that device until a --sign-in passes, since a refused password typed again is how an
+# account is locked.
 #
 # A booted simulator holds gigabytes of the Mac's memory, so a run that used the device shuts it
 # down as it ends, passed or failed, signal included, unless something else is using it (another
@@ -180,7 +182,7 @@ while [ $# -gt 0 ]; do
     --renew) renew=yes; shift ;;
     --resume) resume=yes; shift ;;
     --leak-check) leakcheck=yes; shift ;;
-    -h|--help) sed -n '2,134p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,136p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -214,14 +216,18 @@ print(max(found)[1] if found else "")' "$device")"
 simstate="${TOPO_SIM_STATE:-$HOME/Library/Caches/topo-sim}"
 mkdir -p "$simstate"
 touched=no
+booted_here=no
 leave=""
 stopped="$simstate/$udid.sign-in-stopped"
+# A sign-in of the account passed on this device since its last --erase: the evidence a boot of it
+# has a sign-in to renew, rather than a device a renewal would sign in for the first time.
+signedin="$simstate/$udid.signed-in"
 
 used_now() { touch "$simstate/$udid.last-use" 2>/dev/null || true; }
 
 # The processes, other than this run and its children, using the device; one line each.
 others_using() {
-  ps -axo pid=,ppid=,command= 2>/dev/null | awk -v me="$$" -v u="$udid" '
+  ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v me="$$" -v u="$udid" '
     { pid[NR] = $1; ppid[NR] = $2; line[NR] = $0 }
     END {
       mine[me] = 1
@@ -244,7 +250,7 @@ boot_device() {
   touched=yes
   used_now
   { lockf -s -t 120 7 || { echo "==> another run has held $simstate/mutex for 2 minutes" >&2; return 1; }
-    xcrun simctl boot "$udid" 7>&- 2>/dev/null || true
+    ! xcrun simctl boot "$udid" 7>&- 2>/dev/null || booted_here=yes
   } 7>"$simstate/mutex"
   xcrun simctl bootstatus "$udid" -b >/dev/null
 }
@@ -254,6 +260,7 @@ boot_device() {
 release_device() {
   [ "$touched" = yes ] || return 0
   used_now
+  [ -n "$leave" ] || [ ! -e "$stopped" ] || leave="a sign-in on it stopped, and its code screen may stand"
   if [ -n "$leave" ]; then
     echo "==> $udid is left booted: $leave. The janitor shuts it down once it has stood idle"
     return 0
@@ -279,6 +286,7 @@ if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl erase "$udid"
+  rm -f "$signedin" "$stopped"
   echo "==> erased; the simulator's iCloud account and the app's data are gone"
   exit 0
 fi
@@ -683,6 +691,7 @@ sign_in() {
   fi
   if [ "$status" = 0 ]; then
     rm -f "$stopped"
+    touch "$signedin"
   else
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: see $results" >"$stopped"
     leave="its sign-in stopped, and a two-factor code screen it stopped on stays up for SIGNIN_CODE"
@@ -708,6 +717,16 @@ renew_sign_in() {
   if [ "$status" != 0 ]; then
     echo "==> the renewal stopped, and no run renews this device again until a --sign-in passes. A two-factor stop leaves its code screen up: SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in types the code and goes on" >&2
     exit "$status"
+  fi
+}
+
+# Renews the sign-in after this run booted the device, which ended it, when a sign-in has passed
+# on it before: a device with none recorded is not signed in for the first time unasked.
+renew_after_boot() {
+  if [ -e "$signedin" ]; then
+    renew_sign_in "$1"
+  else
+    echo "==> $udid has no sign-in recorded since its last --erase, so the run renews nothing; if it has an account, DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
   fi
 }
 
@@ -748,12 +767,12 @@ if [ "$talk" = yes ]; then
   elif [ -z "$booted" ]; then
     echo "==> booting the simulator onto the lane's audio devices"
     boot_device
-    renew_sign_in "this run booted it, which ends its sign-in"
+    renew_after_boot "this run booted it, which ends its sign-in"
   else
     echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started"
     xcrun simctl shutdown "$udid" 2>/dev/null || true
     boot_device
-    renew_sign_in "this run rebooted it, which ends its sign-in"
+    renew_after_boot "this run rebooted it, which ends its sign-in"
   fi
   # The result bundle's session log records the test runner's environment whole, and the
   # environment the runner launches the app with, so the token is in neither: it is served once
@@ -816,6 +835,12 @@ if [ "$fresh" = yes ]; then
   xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
 fi
 xcrun simctl install "$udid" "$app"
+# A launch to drive by hand has no iCloud check to find a lapse at, so one on a device this run
+# booted is renewed first. A guest command or guest turn reaches no CloudKit; a --send renews at
+# its check.
+if [ -z "$send$userland$guestturn" ] && [ "$booted_here" = yes ]; then
+  renew_after_boot "this run booted it, which ends its sign-in"
+fi
 
 launcher=""
 # The launcher stays attached to the app's console only when there is a closing line to wait for.

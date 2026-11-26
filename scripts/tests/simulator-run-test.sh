@@ -209,6 +209,8 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
                        say "guest turn 1 answered in 3.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
+  # A boot of a device that is up fails, as simctl's does; FAKE_SIM_BOOTS=fresh is one that was down.
+  boot) [ "${FAKE_SIM_BOOTS:-}" = fresh ] || exit 149 ;;
   # A log show prints lines, and with FAKE_LOG_FAILS fails having printed none.
   spawn) echo "a line of the device's log"; [ -z "${FAKE_LOG_FAILS:-}" ] || exit 1 ;;
   *) exit 0 ;;
@@ -327,7 +329,7 @@ cat >"$work/bin/ps" <<'EOF2'
 #!/bin/bash
 c() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/^Sat/sam./; s/^Mon/lun./; s/^Wed/mer./; s/ Nov / nov. /'; fi; }
 case "$*" in
-  "-axo pid=,ppid=,command=") [ -z "${FAKE_PS_LIST:-}" ] || printf '%s\n' "$FAKE_PS_LIST" ;;
+  "-axwwo pid=,ppid=,command=") [ -z "${FAKE_PS_LIST:-}" ] || printf '%s\n' "$FAKE_PS_LIST" ;;
   "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " | c ;;
   "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " | c ;;
   *) exit 1 ;;
@@ -633,7 +635,7 @@ reboot_case() {
   PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
     FAKE_TALK_ENV="$work/$1.env" FAKE_TALK_GOT="$work/$1.got" FAKE_SIMCTL_CALLS="$work/simctl.calls" FAKE_SIM_BOOTED="$2" \
     FAKE_APPLE_PASSWORD="fake-apple-$$" FAKE_SIGNIN_ENV="$work/$1.signin.env" FAKE_SIGNIN_GOT="$work/$1.signin.got" \
-    FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" LC_ALL=fr_FR.UTF-8 \
+    FAKE_SIM_BOOTS=fresh FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" LC_ALL=fr_FR.UTF-8 \
     "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
   status=$?
   calls="$(grep -xE 'boot|shutdown' "$work/simctl.calls" | tr '\n' ' ' | sed 's/ $//')"
@@ -649,10 +651,16 @@ reboot_case() {
     failures=$((failures + 1))
   fi
 }
+mkdir -p "$TOPO_SIM_STATE"; touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
 reboot_case talk-booted-since-audio  "Sat Nov 14 13:32:28 2026" "shutdown"               no
 # The renewal's own boot finds the device up.
 reboot_case talk-booted-before-audio "Mon Nov  9 09:05:01 2026" "shutdown boot boot shutdown" yes
 reboot_case talk-shut-down           ""                         "boot boot shutdown"          yes
+# A device with no sign-in recorded since its last --erase is not signed in for the first time.
+rm -f "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
+reboot_case talk-never-signed-in     ""                         "boot shutdown"               no
+grep -q "no sign-in recorded" "$work/talk-never-signed-in.out" \
+  || { echo "FAIL talk-never-signed-in: the run does not say it renews nothing"; failures=$((failures + 1)); }
 
 # A talk test that passes without the app having read the token (the app ran on some other
 # login) fails the run.
@@ -933,6 +941,8 @@ sim_case() {
     failures=$((failures + 1))
   fi
 }
+# What earlier cases' sign-ins left (a stop among them) is not these cases'.
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.*
 sim_case sim-send-answered-shuts      pass yes "" 0 FAKE_LAUNCH=answered -- --send hello
 sim_case sim-send-failed-shuts        fail yes "" 0 FAKE_LAUNCH=no-reply -- --send hello
 sim_case sim-userland-shuts           pass yes "" 0 FAKE_LAUNCH=userland-fetched -- --userland "echo hi"
@@ -942,7 +952,10 @@ sim_case sim-sibling-xcodebuild-keeps pass no "left booted for the runs using it
   "FAKE_PS_LIST=  998     1 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -destination platform=iOS Simulator,id=FAKE-UDID" -- --send hello
 sim_case sim-mention-is-no-run        pass yes "" 0 FAKE_LAUNCH=answered \
   "FAKE_PS_LIST=  997     1 claude --name x Task: mend scripts/simulator-run.sh on FAKE-UDID" -- --send hello
+touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
 sim_case sim-hand-launch-keeps        pass no "driven by hand" 0 FAKE_LAUNCH=launched --
+sim_case sim-hand-launch-renews       pass no "driven by hand" 1 FAKE_LAUNCH=launched FAKE_SIM_BOOTS=fresh --
+sim_case sim-guest-turn-renews-none   pass yes "" 0 FAKE_LAUNCH=guest-answered FAKE_SIM_BOOTS=fresh -- --guest-turn "a || b"
 sim_case sim-sign-in-keeps            pass no "signed in for the runs after this one" 1 FAKE_LAUNCH=silent -- --sign-in
 rm -f "$TOPO_SIM_STATE/renewals.log"
 sim_case sim-renews-and-relaunches    pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello
@@ -958,10 +971,20 @@ sim_case sim-still-unavailable-fails  fail yes "DEVICE=FAKE-UDID scripts/simulat
 sim_case sim-renewal-stops            fail no "SIGNIN_CODE=<code> DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in" 1 \
   FAKE_LAUNCH=unavailable FAKE_SIGNIN_STOPS=1 -- --send hello
 sim_case sim-no-renewal-past-a-stop   fail no "so this run types no password" 0 FAKE_LAUNCH=unavailable -- --send hello
+sim_case sim-stop-keeps-the-device    pass no "a sign-in on it stopped" 0 FAKE_LAUNCH=userland-fetched -- --userland "echo hi"
 sim_case sim-sign-in-clears-the-stop  pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
 [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" ] \
   && sim_case sim-renews-after-the-stop pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello \
   || { echo "FAIL sim-sign-in-clears-the-stop: the stop still stands"; failures=$((failures + 1)); }
+
+# --erase forgets the device's sign-in and any stop.
+touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in" "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+PATH="$work/bin:$PATH" "$work/root/scripts/simulator-run.sh" --erase >"$work/erase.out" 2>&1 </dev/null
+if [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.signed-in" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" ]; then
+  echo "ok   sim-erase-forgets: the sign-in and the stop are gone with the device's data"
+else
+  echo "FAIL sim-erase-forgets: $(ls "$TOPO_SIM_STATE")"; failures=$((failures + 1))
+fi
 
 # A run ended by a signal shuts the device down too.
 : >"$work/simctl.calls"; : >"$work/term.launches"
