@@ -275,51 +275,78 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertNil(connections.codeOverPage)
     }
 
-    /// The sign over GitHub's page is there only while the page is, and its tap copies the code
-    /// and opens nothing, so the page the person is typing into is not loaded again under them,
-    /// whatever pause the sign hands its tap; with the connect gone it copies nothing.
-    func testATapOverThePageCopiesAndOpensNothing() async throws {
+    /// Over GitHub's page a copy copies the code and opens nothing, so the page the person is
+    /// typing into is not loaded again under them, and every copy is counted, which is what the
+    /// sign says Copied for; with the connect gone it copies nothing and counts nothing.
+    func testACopyOverThePageCopiesCountsAndOpensNothing() async throws {
         let connections = connections()
         connections.connectGitHub()
         await github.reach(.token)
         await settle()
-        XCTAssertNil(ConnectionsView.signOverPage(connections, look: Look()), "a sign over no page")
+        XCTAssertEqual(connections.copies, 0)
         connections.copyCodeAndOpenGitHub()
         await settle()
         browser.shown[0](true)
-        let sign = try XCTUnwrap(ConnectionsView.signOverPage(connections, look: Look()))
-        XCTAssertEqual(sign.code, "ABCD-1234")
-        XCTAssertEqual(sign.identifier, "github-code-sign-over-page", "two signs answer to one name")
-        copied = []
-        sign.tapped(GitHubCodeSign.pause(Look().settings))
-        try await Task.sleep(for: .milliseconds(1200))
-        XCTAssertEqual(copied, ["ABCD-1234"])
-        XCTAssertEqual(browser.opened.count, 1, "the tap over the page opened it again")
-        XCTAssertEqual(browser.closes, 0)
+        XCTAssertEqual(connections.copies, 1)
         XCTAssertEqual(connections.codeOverPage, "ABCD-1234")
+        copied = []
+        connections.copyCode()
+        XCTAssertEqual(copied, ["ABCD-1234"])
+        XCTAssertEqual(connections.copies, 2)
+        XCTAssertEqual(browser.opened.count, 1, "the copy over the page opened it again")
+        XCTAssertEqual(browser.closes, 0)
 
         connections.cancelGitHub()
         copied = []
-        sign.tapped(.zero)
+        connections.copyCode()
         XCTAssertEqual(copied, [], "a cancelled connect's code was copied")
+        XCTAssertEqual(connections.copies, 2)
         github.release(.token)
     }
 
-    /// The sky is the rows over the first drawn pixel, and the cut keeps every drawn row and
-    /// stays on a whole art pixel.
-    func testTheSkyCutKeepsWhatIsDrawn() throws {
-        let perArt = 3, width = Topo.width * perArt, height = Topo.height * perArt
-        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                              bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+    /// The board says nothing until the sign is up, Copied while a copy is being said, and the
+    /// code otherwise.
+    func testTheBoardSaysTheCodeOnceUpAndCopiedAWhile() {
+        XCTAssertNil(GitHubCodeSign.words(code: "ABCD-1234", raised: false, sayingCopied: true))
+        XCTAssertEqual(GitHubCodeSign.words(code: "ABCD-1234", raised: true, sayingCopied: true), "Copied")
+        XCTAssertEqual(GitHubCodeSign.words(code: "ABCD-1234", raised: true, sayingCopied: false), "ABCD-1234")
+    }
+
+    /// Held up and settled, the board's top is at `GitHubCodeSign.boardTop`, whether it says the
+    /// code or Copied, which is how his place over GitHub's page is measured.
+    func testTheBoardStandsWhereItIsPlaced() throws {
+        for words in ["ABCD-1234", GitHubCodeSign.copiedWords] {
+            var state = Mascot().drawn
+            state.sign = words
+            state.turnOpen = false
+            let still = try XCTUnwrap(WidgetMascotView.still(state.input, steps: GitHubCodeSign.settleSteps))
+            let perArt = still.height / Topo.height
+            let first = try XCTUnwrap((0..<still.height).first { row in
+                (0..<still.width).contains { SignSeen.drawn(still, at: CGPoint(x: (CGFloat($0) + 0.5) / CGFloat(still.width),
+                                                                                  y: (CGFloat(row) + 0.5) / CGFloat(still.height))) }
+            })
+            XCTAssertEqual(first / perArt, GitHubCodeSign.boardTop, "\(words): the board's top moved")
+        }
+    }
+
+    /// Over GitHub's page a touch is his only on a drawn pixel of him, inside his frame, once he
+    /// is in his place; anywhere else it is the page's.
+    func testATouchIsTakenOnlyOnWhatIsDrawn() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 20, height: 10, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(),
                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(UIColor.red.cgColor)
-        // One drawn row, 50 rows down in image terms (CoreGraphics' origin is the bottom).
-        context.fill(CGRect(x: 10, y: height - 51, width: 4, height: 1))
-        let image = try XCTUnwrap(context.makeImage())
-        XCTAssertEqual(GitHubCodeSign.skyRows(image), 50)
-        let cut = GitHubCodeSign.cutSky(image)
-        XCTAssertEqual(cut.height, height - 48, "the cut is not on a whole art pixel at or over the first drawn row")
-        XCTAssertEqual(GitHubCodeSign.skyRows(cut), 2)
+        // The left half drawn, every row of it.
+        context.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+        let seen = SignSeen()
+        seen.image = try XCTUnwrap(context.makeImage())
+        seen.frame = CGRect(x: 100, y: 200, width: 40, height: 20)
+        XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 210)), "a touch was his before he was in his place")
+        seen.settled = true
+        XCTAssertTrue(seen.takes(CGPoint(x: 110, y: 210)), "a touch on him was the page's")
+        XCTAssertFalse(seen.takes(CGPoint(x: 130, y: 210)), "a touch on nothing drawn in his frame was his")
+        XCTAssertFalse(seen.takes(CGPoint(x: 90, y: 210)), "a touch outside his frame was his")
+        XCTAssertFalse(seen.takes(CGPoint(x: 110, y: 230)), "a touch below his frame was his")
     }
 
     /// The sign over the page is read within its bounds and no further: at each end a value is
@@ -744,11 +771,12 @@ final class GitHubToolTests: XCTestCase {
 /// (more than a background's worth of colours) and to differ from one another.
 @MainActor
 final class ConnectionsScreenshots: XCTestCase {
-    /// With GitHub's page up in a sheet presented on the app's window, the sign is drawn over it,
-    /// in a window above the app's, carrying the code: the topmost thing a touch on the sign
-    /// reaches is that window, and a touch beside it reaches the page. The sheet here is a
-    /// page sheet standing in for the system's, which only a device or a simulator with
-    /// network reaches; the window goes with the page.
+    /// With GitHub's page up in a sheet presented on the app's window, Topo swims up over it in a
+    /// window above the app's, the scene's size, and holds the code with his sign's board at its
+    /// place under the safe area's top, centred: a touch on a pixel of him reaches that window,
+    /// and a touch inside it on nothing drawn reaches the page. The sheet here is a page sheet
+    /// standing in for the system's, which only a device or a simulator with network reaches; the
+    /// window goes with the page.
     func testTheSignIsDrawnOverGitHubsPageAndTakesTheTouch() async throws {
         let store = InMemoryConnectionStore()
         let github = HeldGitHub()
@@ -762,25 +790,13 @@ final class ConnectionsScreenshots: XCTestCase {
         func above() -> AboveSheetsWindow? {
             scene.windows.compactMap { $0 as? AboveSheetsWindow }.first { !$0.isHidden }
         }
-        func until(_ what: String, _ done: () -> Bool) async throws {
-            let deadline = Date().addingTimeInterval(5)
-            while !done() {
-                guard Date() < deadline else { return XCTFail("never \(what)") }
-                try await Task.sleep(for: .milliseconds(50))
+        func until(_ what: String, seconds: TimeInterval = 5, _ done: () throws -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(seconds)
+            while try !done() {
+                guard Date() < deadline else { throw Missed(what: what) }
+                try await Task.sleep(for: .milliseconds(100))
             }
         }
-
-        connections.connectGitHub()
-        await github.reach(.token)
-        try await until("drawn the page") { app.rootViewController?.view.window != nil }
-        XCTAssertNil(above(), "a window stood over the screen with no page up")
-        connections.copyCodeAndOpenGitHub()
-        try await until("put the page up") { sheet.page.view.window === app }
-        try await until("held the sign over the page") { above() != nil }
-        let window = try XCTUnwrap(above())
-        XCTAssertGreaterThan(window.windowLevel, app.windowLevel, "the sign's window is under the page's")
-        XCTAssertTrue(scene.coordinateSpace.bounds.contains(window.frame), "the sign stands past the screen's edge")
-
         /// The window over the page's that a touch at `point` reaches, if any: the topmost shown
         /// window above the app's whose hit test takes it. The test host's own windows stand at
         /// the app's level, beside it, and are none of this.
@@ -789,41 +805,72 @@ final class ConnectionsScreenshots: XCTestCase {
                 .sorted { $0.windowLevel > $1.windowLevel }
                 .first { $0.hitTest($0.convert(point, from: nil), with: nil) != nil }
         }
-        let sign = CGPoint(x: window.frame.midX, y: window.frame.midY)
-        XCTAssertTrue(over(sign) === window, "a touch on the sign reaches \(String(describing: over(sign)))")
-        let beside = CGPoint(x: window.frame.midX, y: window.frame.maxY + 40)
-        XCTAssertNil(over(beside), "a touch beside the sign is taken over the page")
-        let hit = app.hitTest(app.convert(beside, from: nil), with: nil)
-        XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch beside the sign does not reach the page")
-
-        // What the window draws: the sign, which is no blank, and reaches the window's head and
-        // foot, so the window takes no touch of the page's above or below what it draws (the
-        // engine's sky over his head included).
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        /// What the window draws, and the box round everything drawn in it, in its points.
+        func drawing(_ window: UIWindow) throws -> (image: UIImage, box: CGRect) {
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let cgImage = try XCTUnwrap(image.cgImage)
+            var box = CGRect.null
+            for y in stride(from: 0, to: cgImage.height, by: 2) {
+                for x in stride(from: 0, to: cgImage.width, by: 2)
+                where SignSeen.drawn(cgImage, at: CGPoint(x: (CGFloat(x) + 0.5) / CGFloat(cgImage.width),
+                                                          y: (CGFloat(y) + 0.5) / CGFloat(cgImage.height))) {
+                    box = box.union(CGRect(x: CGFloat(x) / image.scale, y: CGFloat(y) / image.scale, width: 1, height: 1))
+                }
+            }
+            return (image, box)
         }
+        /// He is in his place: the window is the scene's, and the top of what is drawn, his
+        /// sign's board, stands `signOverPageTop` under the safe area's top, centred.
+        func placed(_ why: String) async throws -> (window: AboveSheetsWindow, box: CGRect, image: UIImage) {
+            var last = CGRect.null
+            do {
+                try await until("placed him \(why)", seconds: 10) {
+                    guard let window = above(), window.frame == scene.coordinateSpace.bounds else { return false }
+                    last = try drawing(window).box
+                    let top = window.safeAreaInsets.top + Look().settings.signOverPageTop
+                    return abs(last.minY - top) <= 2 && abs(last.midX - window.bounds.midX) <= 12
+                }
+            } catch let missed as Missed {
+                XCTFail("\(missed.what): drawn at \(last)")
+                throw missed
+            }
+            let window = try XCTUnwrap(above())
+            let drawn = try drawing(window)
+            return (window, drawn.box, drawn.image)
+        }
+
+        connections.connectGitHub()
+        await github.reach(.token)
+        try await until("drawn the page") { app.rootViewController?.view.window != nil }
+        XCTAssertNil(above(), "a window stood over the screen with no page up")
+        connections.copyCodeAndOpenGitHub()
+        try await until("put the page up") { sheet.page.view.window === app }
+        let (window, box, image) = try await placed("over the page")
+        XCTAssertGreaterThan(window.windowLevel, app.windowLevel, "his window is under the page's")
         let attachment = XCTAttachment(image: image)
         attachment.name = "sign-over-page"
         attachment.lifetime = .keepAlways
         add(attachment)
-        XCTAssertGreaterThan(try colours(image), 8, "the sign over the page is drawn as a blank")
-        let foot = Look().settings.signSpacing + 16
-        XCTAssertTrue(try drawn(image, rows: (image.size.height - foot)..<image.size.height),
-                      "nothing is drawn in the window's last \(foot) points: it is taller than the sign")
-        XCTAssertTrue(try drawn(image, rows: 0..<foot),
-                      "nothing is drawn in the window's first \(foot) points: the sky over his head is in it")
+        XCTAssertGreaterThan(try colours(image), 8, "he is drawn over the page as a blank")
 
-        // The screen turns under the page and back, landscape to portrait being the turn whose
-        // safe area changes most: each time the sign stands where it is placed from the safe area
-        // of the moment, centred.
-        func placed(_ why: String) async throws {
-            try await until("placed the sign \(why)") {
-                guard let window = above() else { return false }
-                let bounds = scene.coordinateSpace.bounds
-                let top = max(0, min(app.safeAreaInsets.top + Look().settings.signOverPageTop, bounds.height - window.frame.height))
-                return abs(window.frame.minY - top) <= 1 && abs(window.frame.midX - bounds.midX) <= 1
-            }
+        // A touch on him is his window's; one in his window on nothing drawn, beside him or
+        // below him, is the page's.
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let onHim = try XCTUnwrap(stride(from: box.minY, to: box.maxY, by: 1).lazy.compactMap { y -> CGPoint? in
+            let point = CGPoint(x: box.midX, y: y + 0.5)
+            return SignSeen.drawn(cgImage, at: CGPoint(x: point.x / window.bounds.width, y: point.y / window.bounds.height)) ? point : nil
+        }.first, "nothing of him is drawn down his middle")
+        XCTAssertTrue(over(onHim) === window, "a touch on him reaches \(String(describing: over(onHim)))")
+        for (name, point) in [("beside him", CGPoint(x: window.bounds.minX + 8, y: box.midY)),
+                              ("below him", CGPoint(x: box.midX, y: box.maxY + 40))] {
+            XCTAssertNil(over(point), "a touch \(name) is taken over the page")
+            let hit = app.hitTest(app.convert(point, from: nil), with: nil)
+            XCTAssertTrue(hit?.isDescendant(of: sheet.page.view) == true, "a touch \(name) does not reach the page")
         }
+
+        // The screen turns under the page and back: each time he stands in his place again.
         for (orientation, why) in [(UIInterfaceOrientationMask.landscapeRight, "in landscape"), (.portrait, "back in portrait")] {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { error in
                 XCTFail("the screen would not turn \(why): \(error)")
@@ -832,31 +879,19 @@ final class ConnectionsScreenshots: XCTestCase {
                 let bounds = scene.coordinateSpace.bounds
                 return orientation == .portrait ? bounds.height > bounds.width : bounds.width > bounds.height
             }
-            try await placed(why)
+            _ = try await placed(why)
         }
 
-        // GitHub answers with the page still up: the sign goes, the page stays until the app
-        // closes it.
+        // GitHub answers with the page still up: he goes, the page stays until the app closes it.
         github.release(.token)
         await github.reach(.login)
-        try await until("taken the sign away once GitHub answered") { above() == nil }
-        XCTAssertTrue(sheet.page.view.window === app, "the page went before the sign")
+        try await until("taken him away once GitHub answered") { above() == nil }
+        XCTAssertTrue(sheet.page.view.window === app, "the page went before him")
         github.release(.login)
         try await until("closed the page") { sheet.page.view.window == nil }
     }
 
-    /// Whether any pixel in the rows `rows`, in points, is not clear.
-    private func drawn(_ image: UIImage, rows: Range<CGFloat>) throws -> Bool {
-        let cgImage = try XCTUnwrap(image.cgImage)
-        let width = cgImage.width, height = cgImage.height
-        var pixels = [UInt32](repeating: 0, count: width * height)
-        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
-                                              bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let first = max(0, Int(rows.lowerBound * image.scale)), last = min(height, Int(rows.upperBound * image.scale))
-        return first < last && pixels[(first * width)..<(last * width)].contains { $0 >> 24 != 0 }
-    }
+    private struct Missed: Error { let what: String }
 
     func testTheScreenInEachState() async throws {
         let store = InMemoryConnectionStore()
@@ -887,13 +922,13 @@ final class ConnectionsScreenshots: XCTestCase {
         XCTAssertEqual(Set(pictures).count, 4, "two states are drawn the same")
     }
 
-    /// The sign carries the code from the first frame drawn: two codes draw two different
-    /// pictures, which they would not if the sign were missing, or if the first frame were him
-    /// still taking it up.
+    /// The sign, once up, carries the code from the first frame drawn: two codes draw two
+    /// different pictures, which they would not if the sign were missing, or if the first frame
+    /// were him still taking it up.
     func testTheSignHoldsTheCodeFromTheFirstFrame() throws {
         let size = CGSize(width: 390, height: 360)
         func sign(_ code: String) throws -> Data {
-            let image = try LookStage.image(GitHubCodeSign(code: code, copied: false, tapped: { _ in })
+            let image = try LookStage.image(GitHubCodeSign(code: code, raised: true, copies: 0, tapped: { _ in })
                 .environment(Mascot()), look: Look(), size: size)
             let attachment = XCTAttachment(image: image)
             attachment.name = "sign-\(code)"
@@ -903,10 +938,10 @@ final class ConnectionsScreenshots: XCTestCase {
         }
         XCTAssertNotEqual(try sign("ABCD-1234"), try sign("WXYZ-9876"), "the sign does not carry the code")
 
-        // Over GitHub's page too, where he is a still cut to what he draws: one code drawn twice
-        // is one picture, to the render server's shade, and two codes are two.
+        // Over GitHub's page too, at that page's scale: one code drawn twice is one picture, to the
+        // render server's shade, and two codes are two.
         func overPage(_ code: String) throws -> [UInt8] {
-            let image = try LookStage.image(GitHubCodeSign(code: code, copied: true, scale: 1, overPage: true, tapped: { _ in })
+            let image = try LookStage.image(GitHubCodeSign(code: code, raised: true, copies: 0, scale: 1, overPage: true, tapped: { _ in })
                 .environment(Mascot()), look: Look(), size: size)
             let attachment = XCTAttachment(image: image)
             attachment.name = "over-page-sign-\(code)"
@@ -932,9 +967,9 @@ final class ConnectionsScreenshots: XCTestCase {
         XCTAssertEqual(style.settings.signFont, .system(.largeTitle))
         for (name, look) in [("400 points", largest), ("largeTitle", style)] {
             for size in [DynamicTypeSize.large, .accessibility5] {
-                for copied in [false, true] {
-                    let label = "\(name), \(size), copied \(copied)"
-                    let host = UIHostingController(rootView: GitHubCodeSign(code: "ABCD-1234", copied: copied, tapped: { _ in })
+                for raised in [false, true] {
+                    let label = "\(name), \(size), raised \(raised)"
+                    let host = UIHostingController(rootView: GitHubCodeSign(code: "ABCD-1234", raised: raised, copies: 0, tapped: { _ in })
                         .environment(Mascot()).environment(\.look, look).dynamicTypeSize(size))
                     let fitted = host.sizeThatFits(in: CGSize(width: 320, height: CGFloat.infinity))
                     XCTAssertLessThanOrEqual(fitted.width, 320, "\(label): the sign is wider than the page")

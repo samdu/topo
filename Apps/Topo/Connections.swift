@@ -235,9 +235,11 @@ final class Connections {
         }
     }
 
-    /// The code shown has been put on the pasteboard by this connect, which is what the screen
-    /// says before it says the code is copied.
+    /// The code shown has been put on the pasteboard by this connect: from then on Topo holds it
+    /// up on his sign.
     private(set) var codeCopied = false
+    /// Every copy of a code, counted, so each one is said on the sign (`GitHubCodeSign`).
+    private(set) var copies = 0
 
     /// The code shown, copied to the pasteboard at once, then GitHub's page for it opened in the
     /// in-app browser `after` the confirmation the screen draws. The page opens only if this
@@ -265,6 +267,7 @@ final class Connections {
         guard case let .waiting(code) = github else { return }
         copy(code.userCode)
         codeCopied = true
+        copies += 1
     }
 
     /// The in-app browser's sheet is up over the screen, which then draws nothing moving.

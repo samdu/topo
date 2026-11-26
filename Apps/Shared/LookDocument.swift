@@ -310,15 +310,13 @@ enum LookDocument {
         // points tall, a style shrunk to that at a larger text size.
         r.font("signFont", &value.signFont, largest: Look.Settings.signFontLargest)
         r.colour("signInk", &value.signInk)
-        r.colour("copiedInk", &value.copiedInk)
         r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
         r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
-        // Over GitHub's page the sign covers what is under it, so it is no larger than on the
-        // Connections page and no wider than the narrowest phone (184 × 1.7 < 320 points). It
-        // stands under the browser's bar, which on an iPhone ends some 80 points under the safe
-        // area's top with the browser over Settings and Connections, so the bar's close button is
-        // never under it; at any top the window that holds it is kept on the screen
-        // (`AboveSheetsWindow.frame`).
+        // Over GitHub's page Topo and his sign cover what is under them, so they are no larger
+        // than on the Connections page and no wider than the narrowest phone (184 × 1.7 < 320
+        // points). The board stands under the browser's bar, which on an iPhone ends some 80
+        // points under the safe area's top with the browser over Settings and Connections, so the
+        // bar's close button is never under it.
         r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...1.7)
         r.bounded("signOverPageTop", &value.signOverPageTop, in: Look.Settings.signOverPageTopRange)
     }

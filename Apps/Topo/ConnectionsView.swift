@@ -11,6 +11,8 @@ struct ConnectionsView: View {
     @Environment(\.look) private var look
     @Environment(Mascot.self) private var mascot
     @State private var confirmingDisconnect = false
+    /// Where Topo over GitHub's page is drawn and what he last drew.
+    @State private var seen = SignSeen()
     @State private var confirmingOnePasswordDisconnect = false
 
     var body: some View {
@@ -19,21 +21,21 @@ struct ConnectionsView: View {
                 github
                 onePassword
             }
-            // While GitHub waits on its code, Topo holds it up on a sign at the foot of the page:
-            // a tap copies it, says so, and only then opens GitHub's page over it.
+            // While GitHub waits on its code, Topo stands at the foot of the page, and once the
+            // code is copied he holds it up on a sign: a tap copies it again, says so on the sign,
+            // and then opens GitHub's page over it.
             .safeAreaInset(edge: .bottom) {
                 if case let .waiting(code) = connections.github {
-                    GitHubCodeSign(code: code.userCode, copied: connections.codeCopied,
+                    GitHubCodeSign(code: code.userCode, raised: connections.codeCopied, copies: connections.copies,
                                    covered: connections.browserShowing) { pause in
                         connections.copyCodeAndOpenGitHub(after: pause)
                     }
                 }
             }
             // While GitHub's page for that code is up in the browser's sheet, which covers the
-            // sign at the foot, he holds it up over the page too: a tap there copies the code
-            // and opens nothing, since the page is already the one it is for.
-            .background(AboveSheets(content: overPage, top: look.settings.signOverPageTop,
-                                    width: CGFloat(Topo.width) * look.settings.signOverPageScale))
+            // foot, he swims up over the page and holds the code there too: a touch on him copies
+            // it and opens nothing, and every other touch is the page's.
+            .background(AboveSheets(content: overPage, takes: { [seen] in seen.takes($0) }))
             .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -41,19 +43,11 @@ struct ConnectionsView: View {
         .tint(look.settings.tint)
     }
 
-    /// The sign over GitHub's page, carrying what the window above the sheet does not inherit.
+    /// Topo over GitHub's page, carrying what the window above the sheet does not inherit.
     private var overPage: (some View)? {
-        Self.signOverPage(connections, look: look).map { $0.environment(mascot).environment(\.look, look) }
-    }
-
-    /// The sign held over GitHub's page while it is up (`codeOverPage`): its tap copies the code
-    /// and opens nothing, since the page is already the one it is for.
-    static func signOverPage(_ connections: Connections, look: Look) -> GitHubCodeSign? {
         connections.codeOverPage.map { code in
-            GitHubCodeSign(code: code, copied: connections.codeCopied, scale: look.settings.signOverPageScale,
-                           hint: "Copies the code", identifier: "github-code-sign-over-page", overPage: true) { _ in
-                connections.copyCode()
-            }
+            GitHubSignOverPage(code: code, copies: connections.copies, seen: seen) { connections.copyCode() }
+                .environment(mascot).environment(\.look, look)
         }
     }
 
@@ -173,7 +167,7 @@ struct ConnectionsView: View {
         case .waiting where connections.codeCopied:
             Text("The code is copied. Paste it on GitHub's page and approve Topo; this screen finishes by itself.")
         case .waiting:
-            Text("Tap Topo's sign to copy the code, then paste it on GitHub's page and approve Topo; this screen finishes by itself.")
+            Text("Copy the code, then paste it on GitHub's page and approve Topo; this screen finishes by itself.")
         case .connected:
             Text("git and gh in Topo's Linux use this connection, with your access to every repository, your organizations' membership and workflow files. Disconnecting forgets the token here; revoke it at github.com/settings/applications.")
         default:
@@ -182,14 +176,20 @@ struct ConnectionsView: View {
     }
 }
 
-/// Topo holding GitHub's one-time code up on a sign, drawn by the engine the chat draws him with,
-/// and the line under him. The sign is the button: a tap copies the code and jumps the sign, the
-/// line turns to the confirmation, and `tapped` is handed how long the confirmation stands before
-/// GitHub's page opens. He is drawn holding the sign from the first frame, never taking it up, so
-/// the code is readable at once. Under Reduce Motion he is one still frame, and nothing jumps.
+
+/// Topo while GitHub waits on its code, drawn by the engine the chat draws him with. Until the
+/// code is copied he stands with nothing in his hands; once it is (`raised`) he takes the sign up
+/// and holds the code, and the sign is the button. Each copy while it is up (`copies`) is said on
+/// the board itself, Copied for `look.settings.copiedPause`, and then the code again, so a code
+/// copied and lost from the pasteboard is still there to read and copy. A tap copies, jumps him
+/// at the foot of the page, and hands `tapped` how long the board says Copied. Under Reduce Motion
+/// he is one still frame per state, and nothing jumps.
 struct GitHubCodeSign: View {
     let code: String
-    let copied: Bool
+    /// He holds the sign up.
+    let raised: Bool
+    /// The copies made so far (`Connections.copies`).
+    let copies: Int
     /// GitHub's page is over him: no frame is drawn until it goes.
     var covered = false
     /// Points an art pixel: the Connections page's or, over GitHub's page, that one's.
@@ -197,32 +197,48 @@ struct GitHubCodeSign: View {
     /// What the tap does, said to VoiceOver, and the name a test finds the sign by.
     var hint = "Copies the code and opens GitHub"
     var identifier = "github-code-sign"
-    /// Over GitHub's page: him still, and the picture cut down to the top of what he draws, so
-    /// the empty sky the engine leaves over his head covers none of the page.
+    /// Over GitHub's page: the picture alone, with no line under it and no jump, and what it
+    /// draws and where told to `seen`, which is how his window knows a touch on him.
     var overPage = false
+    var seen: SignSeen?
     let tapped: (Duration) -> Void
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(Mascot.self) private var mascot
     @State private var driver = MascotDriver()
     @State private var bumped = false
+    @State private var sayingCopied = false
+    @State private var saying: Task<Void, Never>?
     /// Thirtieths of a second for his arm to take the sign up and settle, for the still.
     static let settleSteps = 90
+    /// The art row the top of a one-line board stands at once he holds it up, his place's
+    /// measure: `testTheBoardStandsWhereItIsPlaced` holds the engine to it.
+    static let boardTop = 79
+    /// What the board says for a while after a copy.
+    static let copiedWords = "Copied"
+
+    /// What the board says: nothing until the sign is up, then Copied a while after each copy,
+    /// and otherwise the code.
+    static func words(code: String, raised: Bool, sayingCopied: Bool) -> String? {
+        guard raised else { return nil }
+        return sayingCopied ? copiedWords : code
+    }
 
     private var input: TopoInput {
         var state = mascot.drawn
-        state.sign = code
+        state.sign = Self.words(code: code, raised: raised, sayingCopied: sayingCopied)
         state.turnOpen = false
         state.activity = .idle
         return state.input
     }
 
+    private struct Said: Equatable { var raised: Bool, copies: Int }
+
     var body: some View {
-        let cut = overPageStill
         VStack(spacing: look.settings.signSpacing) {
             Button {
                 tapped(Self.pause(look.settings))
-                guard !reduceMotion else { return }
+                guard !reduceMotion, !overPage else { return }
                 withAnimation(.spring(duration: 0.2)) { bumped = true } completion: {
                     withAnimation(.spring(duration: 0.3)) { bumped = false }
                 }
@@ -230,37 +246,50 @@ struct GitHubCodeSign: View {
                 // At most `signScale` times the engine's picture, and never wider than the page:
                 // the code on the sign is what the person reads, so none of it is cut off. The
                 // jump is inside that frame too (`drawnScale`).
-                // Over GitHub's page the window is measured from the sign, so the picture is
-                // the size it is drawn at rather than a size it may shrink from.
-                let wide = CGFloat(Topo.width) * (scale ?? look.settings.signScale)
-                let tall = CGFloat(Topo.height - (cut?.sky ?? 0)) * (scale ?? look.settings.signScale)
-                picture(cut?.image)
-                    .scaleEffect(Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
-                    .frame(minWidth: overPage ? wide : nil, maxWidth: wide, minHeight: overPage ? tall : nil, maxHeight: tall)
+                picture
+                    .scaleEffect(overPage ? 1 : Self.drawnScale(bumped: bumped, bump: look.settings.copiedBump))
+                    .frame(maxWidth: CGFloat(Topo.width) * (scale ?? look.settings.signScale),
+                           maxHeight: CGFloat(Topo.height) * (scale ?? look.settings.signScale))
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { seen?.frame = $0 }
             }
             .buttonStyle(.plain)
+            .allowsHitTesting(raised)
+            .accessibilityHidden(!raised)
             .accessibilityLabel("GitHub code \(code)")
             .accessibilityHint(hint)
             .accessibilityIdentifier(identifier)
-            .sensoryFeedback(.success, trigger: copied) { _, now in now }
-            Group {
-                if copied {
-                    Label("Copied", systemImage: "checkmark").foregroundStyle(look.settings.copiedInk)
-                } else {
-                    Text("Tap the sign to copy the code").foregroundStyle(look.settings.signInk)
-                }
+            .sensoryFeedback(.success, trigger: copies) { _, _ in raised }
+            if raised && !overPage {
+                Text("Tap the sign to copy the code")
+                    .foregroundStyle(look.settings.signInk)
+                    .font(look.settings.signFont)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    // A style grows with the text size; past two lines of the largest font it
+                    // shrinks to fit rather than pushing the sign up the page.
+                    .minimumScaleFactor(Look.Settings.signLineShrink)
+                    .frame(maxHeight: Look.Settings.signLineMost)
+                    .accessibilityIdentifier("github-code-line")
             }
-            .font(look.settings.signFont)
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
-            // A style grows with the text size; past two lines of the largest font it shrinks
-            // to fit rather than pushing the sign up the page.
-            .minimumScaleFactor(Look.Settings.signLineShrink)
-            .frame(maxHeight: Look.Settings.signLineMost)
-            .accessibilityIdentifier("github-code-line")
         }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, look.settings.signSpacing)
+        .frame(maxWidth: overPage ? nil : .infinity)
+        .padding(.bottom, overPage ? 0 : look.settings.signSpacing)
+        .onChange(of: Said(raised: raised, copies: copies)) { _, now in
+            if now.raised { sayCopied() }
+        }
+        .onDisappear { saying?.cancel() }
+    }
+
+    /// The board says Copied for the look's pause, then the code again; a copy meanwhile starts
+    /// the pause again.
+    private func sayCopied() {
+        saying?.cancel()
+        sayingCopied = true
+        let pause = Self.pause(look.settings)
+        saying = Task {
+            do { try await Task.sleep(for: pause) } catch { return }
+            sayingCopied = false
+        }
     }
 
     /// How large the picture is drawn in its frame: at rest one `bump`th of it, so the jump at
@@ -269,49 +298,17 @@ struct GitHubCodeSign: View {
         bumped ? 1 : 1 / bump
     }
 
-    /// How long the confirmation stands before GitHub's page opens.
+    /// How long the board says Copied, which at the foot is also how long before GitHub's page
+    /// opens.
     static func pause(_ settings: Look.Settings) -> Duration {
         .milliseconds(Int((settings.copiedPause * 1000).rounded()))
     }
 
-    /// Over GitHub's page, the still he is drawn as, cut to what he draws, and the art pixels of
-    /// sky cut from it; nil elsewhere.
-    private var overPageStill: (image: CGImage, sky: Int)? {
-        guard overPage, let still = WidgetMascotView.still(input, steps: Self.settleSteps) else { return nil }
-        let cut = Self.cutSky(still)
-        return (cut, (still.height - cut.height) * Topo.height / max(still.height, 1))
-    }
-
-    /// The rows at the top of `image` with nothing drawn in them.
-    static func skyRows(_ image: CGImage) -> Int {
-        let width = image.width, height = image.height
-        var pixels = [UInt32](repeating: 0, count: width * height)
-        let drawn = pixels.withUnsafeMutableBytes { bytes -> Bool in
-            guard let context = CGContext(data: bytes.baseAddress, width: width, height: height, bitsPerComponent: 8,
-                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-        guard drawn else { return 0 }
-        for row in 0..<height where pixels[(row * width)..<((row + 1) * width)].contains(where: { $0 >> 24 != 0 }) {
-            return row
-        }
-        return 0
-    }
-
-    /// `image` without its empty sky, cut on a whole art pixel so the picture keeps its grid.
-    static func cutSky(_ image: CGImage) -> CGImage {
-        let perArt = max(image.height / Topo.height, 1)
-        let rows = skyRows(image) / perArt * perArt
-        return image.cropping(to: CGRect(x: 0, y: rows, width: image.width, height: image.height - rows)) ?? image
-    }
-
-    @ViewBuilder private func picture(_ cut: CGImage?) -> some View {
-        if overPage {
-            if let cut { image(cut) }
-        } else if reduceMotion {
-            if let still = WidgetMascotView.still(input, steps: Self.settleSteps) { image(still) }
+    @ViewBuilder private var picture: some View {
+        if reduceMotion {
+            if let still = WidgetMascotView.still(input, steps: Self.settleSteps) {
+                image(still).task(id: still) { seen?.image = still }
+            }
         } else {
             TimelineView(.animation(minimumInterval: look.mascot.frameInterval, paused: covered)) { context in
                 Group {
@@ -323,6 +320,7 @@ struct GitHubCodeSign: View {
                     driver.input = input
                     if driver.frames == 0 { driver.settle(Self.settleSteps) }
                     driver.tick(min(now.timeIntervalSince(last), MascotCanvas.stepCap(interval: look.mascot.frameInterval)))
+                    seen?.image = driver.image
                 }
             }
             .onAppear { driver.conditions = .init(active: true, onScreen: true) }
@@ -331,5 +329,84 @@ struct GitHubCodeSign: View {
 
     private func image(_ frame: CGImage) -> some View {
         Image(decorative: frame, scale: 1).interpolation(.none).resizable().scaledToFit()
+    }
+}
+
+/// Topo over GitHub's page: he comes up from the foot of the screen at `look.mascot.swimSpeed`
+/// to his place, the top of the sign's board `look.settings.signOverPageTop` points under the
+/// safe area's top and centred, below the browser's bar on an iPhone, and only there takes the
+/// sign up, saying Copied a while before it shows the code. Under Reduce Motion he is put there.
+/// He swims as the sheet's own window does not move, so nothing of the page is his until he is
+/// in his place (`SignSeen.settled`).
+struct GitHubSignOverPage: View {
+    let code: String
+    let copies: Int
+    let seen: SignSeen
+    let copy: () -> Void
+    @Environment(\.look) private var look
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Points below his place he is drawn at; nil before he has begun, which is the screen's foot.
+    @State private var below: CGFloat?
+    @State private var arrived = false
+
+    var body: some View {
+        let scale = look.settings.signOverPageScale
+        let size = CGSize(width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
+        let top = look.settings.signOverPageTop - CGFloat(GitHubCodeSign.boardTop) * scale
+        GeometryReader { proxy in
+            let foot = proxy.size.height + proxy.safeAreaInsets.bottom - top
+            GitHubCodeSign(code: code, raised: arrived, copies: copies, scale: scale, hint: "Copies the code",
+                           identifier: "github-code-sign-over-page", overPage: true, seen: seen) { _ in copy() }
+                .frame(width: size.width, height: size.height)
+                .position(x: proxy.size.width / 2, y: top + size.height / 2)
+                .offset(y: below ?? foot)
+                .onAppear { swim(from: foot) }
+        }
+        .onDisappear { seen.settled = false }
+    }
+
+    private func swim(from foot: CGFloat) {
+        guard below == nil else { return }
+        guard !reduceMotion, foot > 0 else {
+            below = 0
+            arrive()
+            return
+        }
+        withAnimation(.easeInOut(duration: foot / look.mascot.swimSpeed)) { below = 0 } completion: { arrive() }
+    }
+
+    private func arrive() {
+        arrived = true
+        seen.settled = true
+    }
+}
+
+/// Where Topo over GitHub's page is drawn and the last picture of him, in his window's points,
+/// so the window takes a touch on a pixel of him or his sign once he is in his place and passes
+/// every other touch to the page.
+@MainActor final class SignSeen {
+    var frame = CGRect.null
+    var image: CGImage?
+    var settled = false
+
+    func takes(_ point: CGPoint) -> Bool {
+        guard settled, frame.contains(point), frame.width > 0, frame.height > 0, let image else { return false }
+        return Self.drawn(image, at: CGPoint(x: (point.x - frame.minX) / frame.width, y: (point.y - frame.minY) / frame.height))
+    }
+
+    /// Whether anything is drawn in `image` at `unit`, a point of its unit square from the top left.
+    static func drawn(_ image: CGImage, at unit: CGPoint) -> Bool {
+        let x = Int(unit.x * CGFloat(image.width)), y = Int(unit.y * CGFloat(image.height))
+        guard (0..<image.width).contains(x), (0..<image.height).contains(y),
+              let one = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)) else { return false }
+        var pixel: UInt32 = 0
+        let read = withUnsafeMutableBytes(of: &pixel) { bytes -> Bool in
+            guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(one, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        return read && pixel >> 24 != 0
     }
 }
