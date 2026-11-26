@@ -139,8 +139,14 @@ enum MascotSprite {
     /// ways between them — in both facings, with two pixels round it
     /// (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`). Facing right what a
     /// pose reaches on his right is reached on his left, so each side is the longer of the two.
-    /// A sign is not in it: `signReach` is.
-    static let reach = CGRect(x: 15, y: 47, width: 130, height: 113)
+    /// A sign is not in it: `signReach` is. The swim is: its three poses, their arms aimed every way
+    /// a swim can go, turned about `pivot` by every lean the way there passes through, to
+    /// `MascotLean.most` (`MascotGeometryTests.testEverySwimFrameIsDrawnInsideTheReach`).
+    static let reach = CGRect(x: 15, y: 47, width: 130, height: 117)
+
+    /// The point his picture is turned about as his head leads a swim (`MascotLean`), as a share
+    /// of the picture across and down: a little above the middle of his body, at (80, 110).
+    static let pivot = CGPoint(x: 80.0 / Double(Topo.width), y: 110.0 / Double(Topo.height))
 
     /// The part of the picture he can be drawn in while he holds up a sign: `reach`, and every
     /// pixel the engine draws taking the largest board it makes (three lines of eleven) up from
@@ -148,7 +154,7 @@ enum MascotSprite {
     /// round it, each side the longer of the two facings as `reach` is
     /// (`MascotGeometryTests.testEverySignIsDrawnInsideTheSignReach`). A board of fewer words is
     /// smaller, so it is inside too.
-    static let signReach = CGRect(x: -21, y: 45, width: 202, height: 115)
+    static let signReach = CGRect(x: -21, y: 45, width: 202, height: 119)
 
     /// The reach for a picture holding up `sign`, or none.
     static func reach(sign: String?) -> CGRect { sign == nil ? reach : signReach }
@@ -358,6 +364,17 @@ struct MascotField: Equatable, Sendable, Codable {
             a.value.count < b.value.count || (a.value.count == b.value.count && abs(a.key) > abs(b.key))
         }), best.value.count >= still else { return 0 }
         return best.value.sum / CGFloat(best.value.count)
+    }
+
+    /// The geometry `dy` points on: the words carried down the screen by it (up, negative), and
+    /// the code block the voice reached with them; the transcript, the pane, the well and the
+    /// keyboard where they are, since SwiftUI lays those out where they land.
+    func ahead(by dy: CGFloat) -> MascotField {
+        guard dy != 0 else { return self }
+        var ahead = self
+        ahead.obstacles = obstacles.map { $0.offsetBy(dx: 0, dy: dy) }
+        if let beside { ahead.beside = Beside(frame: beside.frame.offsetBy(dx: 0, dy: dy), serial: beside.serial) }
+        return ahead
     }
 
     /// An obstacle within this of where one of its size stood has not moved.
@@ -733,17 +750,15 @@ enum MascotPerch {
     }
 
     /// The settings he is placed by while the model slider calls him: pinned under its chosen
-    /// stop, whatever the look's placement, and going there and along the slider at `swim`, or the
-    /// stroll where that is faster. A pin and not a policy of its own, so the glide to a new stop and the way
-    /// back are the pin's (`MascotRoam.perch`); where the pin puts him is `under`, which the roam
-    /// asks while a stop is there. The look's own settings where no stop is.
-    static func sliding(_ settings: MascotRoam.Settings, under field: MascotField?, swim: CGFloat) -> MascotRoam.Settings {
+    /// stop, whatever the look's placement. A pin and not a policy of its own, so the swim to a new
+    /// stop and the way back are the pin's (`MascotRoam.perch`); where the pin puts him is `under`,
+    /// which the roam asks while a stop is there. The look's own settings where no stop is.
+    static func sliding(_ settings: MascotRoam.Settings, under field: MascotField?) -> MascotRoam.Settings {
         guard let field, let box = under(field, size: settings.size, reach: settings.reach) else { return settings }
         var sliding = settings
         sliding.placement = .pinned
         sliding.pin = pin(of: box, in: field.pinFrame)
         sliding.sliding = true
-        sliding.speed = max(swim, settings.speed)
         return sliding
     }
 
@@ -809,9 +824,19 @@ private extension Comparable {
 /// of a scroll — or a single frame of it while something is over him, so a covered Topo gets out
 /// of the way as soon as the scroll or the landing turn stops rather than a settle later. It
 /// is never made mid-move, and a roost within `clearance` of where he stands is not a move while
-/// where he stands is a roost itself (`MascotRoost.holds`). A move is one eased glide at `speed` points a second on average — `hurry` times that on every frame
-/// anything is over him, and back to the stroll the frame he is clear — which under Reduce Motion
-/// is a placement with no glide.
+/// where he stands is a roost itself (`MascotRoost.holds`). A move is one swim (`MascotSwim`),
+/// strokes of `stride` points at the cruise, or at `hurry` times its pace where anything is over
+/// him as it begins — which under Reduce Motion is a placement with no swim.
+///
+/// He does not wait for the words to stop before he braces: the moment anything starts to move —
+/// the words scrolling, the keyboard or the pane, a word reaching him — a Topo standing
+/// still balls up into the swim's scrunch (`ball`), and `scrunchMin` into it he shoots, hurried,
+/// for the place `MascotRoost.decide` finds on the geometry as it will be (`MascotField.ahead`:
+/// the words carried on `lookahead` seconds by the way they are scrolling, the pane and the
+/// keyboard where they are). That shot is provisional: once the geometry has been quiet `quietFor`
+/// he decides again on the real one, and kicks again, from where he is, if that place is more than
+/// `correction` points off. Nothing coming for him once it is quiet, or `holdFor` into the ball, he
+/// unscrunches where he is.
 ///
 /// A word that displaces him sends him to its far side from where it is going — under a word
 /// moving up the screen or standing still, over one moving down — so it passes over him once
@@ -827,7 +852,9 @@ struct MascotRoam: Equatable, Sendable {
         /// How far the picture he can be drawn in reaches past his box, which the transcript's
         /// edges hold.
         var reach: MascotSprite.Reach
-        var speed: CGFloat
+        /// How far one stroke carries him at the cruise (`Look.Mascot.stride`).
+        var stride: CGFloat
+        /// How many times the cruise his strokes come in a hurry (`Look.Mascot.hurry`).
         var hurry: CGFloat
         var settle: Double
         var reduceMotion = false
@@ -842,13 +869,13 @@ struct MascotRoam: Equatable, Sendable {
         /// (`MascotPerch.under`), and not at a pin of the person's.
         var sliding = false
 
-        init(size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none, speed: CGFloat,
-             hurry: CGFloat = 10, settle: Double, reduceMotion: Bool = false,
+        init(size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none, stride: CGFloat = Look.Mascot().stride,
+             hurry: CGFloat = Look.Mascot().hurry, settle: Double, reduceMotion: Bool = false,
              placement: Look.Mascot.Placement = .roam, pin: CGPoint = Look.Mascot().pin) {
             self.size = size
             self.clearance = clearance
             self.reach = reach
-            self.speed = speed
+            self.stride = stride
             self.hurry = hurry
             self.settle = settle
             self.reduceMotion = reduceMotion
@@ -860,12 +887,12 @@ struct MascotRoam: Equatable, Sendable {
         init(_ mascot: Look.Mascot, perch: CGFloat = Look.Composer().perchInset, reduceMotion: Bool,
              within: CGRect = MascotSprite.reach) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
-                      reach: MascotSprite.reach(scale: mascot.scale, within: within), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
+                      reach: MascotSprite.reach(scale: mascot.scale, within: within), stride: mascot.stride, hurry: mascot.hurry, settle: mascot.roamSettle,
                       reduceMotion: reduceMotion, placement: mascot.placement, pin: mascot.pin)
             self.perch = perch
         }
 
-        /// The same policy and the same place: a change of either is a glide to where the new one
+        /// The same policy and the same place: a change of either is a swim to where the new one
         /// puts him. A pin is the place of a pinned Topo and the perch that of one on the glass.
         func samePlace(as other: Settings) -> Bool {
             placement == other.placement && sliding == other.sliding && (placement != .pinned || pin == other.pin)
@@ -873,29 +900,53 @@ struct MascotRoam: Equatable, Sendable {
         }
     }
 
-    /// One glide, from one picture origin to another, eased at both ends. `duration` is the
-    /// glide at the stroll, and `elapsed` how far along it he is, in the stroll's seconds: a frame
-    /// in a hurry moves it on by `hurry` frames' worth, so the ease is the same curve run faster.
+    /// One swim, from one picture origin to another (`MascotSwim`), and whether it was aimed at a
+    /// geometry still to come (`provisional`), which the quiet after it puts right. The guess
+    /// carried the words to `guessed`, a moment on, so until then the words' drift is in the aim
+    /// already and does not carry it; after it, it does.
     struct Move: Equatable, Sendable {
-        var from: CGPoint
-        var to: CGPoint
-        var duration: Double
-        var elapsed = 0.0
-        /// How many times the stroll it goes at the least: 1, or the hurry for a pinned Topo the
-        /// keyboard has come up over.
-        var pace: CGFloat = 1
+        var swim: MascotSwim
+        var provisional = false
+        var guessed = 0.0
 
-        /// Where he is `elapsed` stroll-seconds along it.
-        func at(_ elapsed: Double) -> CGPoint {
-            guard duration > 0 else { return to }
-            let u = min(max(elapsed / duration, 0), 1)
-            let eased = CGFloat((1 - cos(.pi * u)) / 2)
-            return CGPoint(x: from.x + (to.x - from.x) * eased, y: from.y + (to.y - from.y) * eased)
+        init(from: CGPoint, to: CGPoint, stride: CGFloat, pace: Double = 1, scrunched: Bool = false) {
+            swim = MascotSwim(from: from, to: to, stride: stride, pace: pace, scrunched: scrunched)
         }
 
-        var point: CGPoint { at(elapsed) }
-        var done: Bool { elapsed >= duration }
+        var from: CGPoint {
+            get { swim.from }
+            set { swim.from = newValue }
+        }
+        var to: CGPoint {
+            get { swim.to }
+            set { swim.to = newValue }
+        }
+        var pace: Double { swim.pace }
+        var duration: Double { swim.duration }
+        var elapsed: Double { swim.elapsed }
+        var point: CGPoint { swim.point }
+        var phase: MascotSwim.Phase { swim.phase }
+        var done: Bool { swim.done }
+        func at(_ elapsed: Double) -> CGPoint { swim.at(elapsed).point }
+
+        /// The same swim, from `here`, where he is drawn, to `to` instead: the stroke he is in
+        /// carries on, and the rest of the way is between the two (`MascotSwim.bend`).
+        mutating func retarget(_ to: CGPoint, from here: CGPoint) {
+            swim.bend(from: here, to: to)
+        }
     }
+
+    /// How long into the ball he shoots, how far ahead the guess at where the words are going looks,
+    /// in seconds, and the most it carries them, in points.
+    static let scrunchMin = 0.14, lookahead = 0.3, lookaheadLimit: CGFloat = 160
+    /// The quiet after which the geometry is the real one, and the longest he stays a ball with
+    /// nothing coming for him, in seconds.
+    static let quietFor = 0.12, holdFor = 1.2
+    /// How far the real place may be from where a provisional shot was going before he kicks again,
+    /// in points.
+    static let correction: CGFloat = 14
+    /// The words' movement is fresh this long after their last drift, in seconds.
+    static let freshFor = 0.12
 
     var settings: Settings
     private(set) var field: MascotField?
@@ -913,6 +964,19 @@ struct MascotRoam: Equatable, Sendable {
     /// His picture's origin now; nil while he stands nowhere.
     private(set) var position: CGPoint?
     private(set) var move: Move?
+    /// When he balled up, braced for a move whose destination is not yet known; nil while he is not.
+    private(set) var ball: Double?
+    /// The geometry a ball found no better place on: he does not ball up again until it changes.
+    private var stuck: MascotField?
+    /// Whether he has balled up since the geometry was last quiet: one ball a stretch of motion,
+    /// and what follows in it is the settle's, so a drag that outlasts a shot is not a shot after
+    /// a shot.
+    private var braced = false
+    /// How fast the words are moving, in points a second down the screen, smoothed over the clock's
+    /// ticks: the drift since the last tick over the time it took.
+    private(set) var velocity: CGFloat = 0
+    private var drifting: CGFloat = 0
+    private var drifted = -Double.infinity
     /// Something he may not cover overlaps him where he is now: a word his box, or the pane, the
     /// well or the keyboard his reach.
     private(set) var covered = false
@@ -934,7 +998,7 @@ struct MascotRoam: Equatable, Sendable {
     /// The frame a pin is a fraction of with the keyboard down (`MascotField.pinFrame`): the last
     /// of a geometry with no keyboard in it.
     private(set) var resting: CGRect?
-    /// How many glides have begun, for the tests.
+    /// How many swims have begun, for the tests.
     private(set) var moves = 0
     /// Which way the words are moving, in points down the screen at the last geometry (up
     /// negative): none when that geometry moved nothing, and none once the geometry has settled.
@@ -980,10 +1044,19 @@ struct MascotRoam: Equatable, Sendable {
     var picture: CGRect? { position.map { CGRect(origin: $0, size: settings.size) } }
     /// He is not drawn: he stands nowhere.
     var hidden: Bool { position == nil }
-    /// He is gliding, which is when he wears the walk.
-    var walking: Bool { move != nil }
-    /// There is something the clock has to move on: a glide, or a decision waiting on the quiet.
-    var needsTime: Bool { move != nil || unsettled || visitDue }
+    /// He is swimming: under way, or balled up for it.
+    var swimming: Bool { move != nil || ball != nil }
+    /// The pose of the stroke he is in: the scrunch while he is a ball; nil while he is not swimming.
+    var phase: MascotSwim.Phase? { move?.phase ?? (ball != nil ? .open : nil) }
+    /// The way the swim goes, which his head leads along: none while he is not under way, through
+    /// the scrunch a swim starts at (`MascotSwim.leads`), or for a swim of no length, which has no
+    /// way for his head to lead.
+    var course: CGVector? {
+        guard let move, move.swim.leads, hypot(move.to.x - move.from.x, move.to.y - move.from.y) > 0.5 else { return nil }
+        return CGVector(dx: move.to.x - move.from.x, dy: move.to.y - move.from.y)
+    }
+    /// There is something the clock has to move on: a swim, a ball, or a decision waiting on the quiet.
+    var needsTime: Bool { move != nil || ball != nil || unsettled || visitDue }
     /// A code block the voice has reached that he has not gone to stand beside yet: roaming, the
     /// transcript read and no finger on him.
     var visitDue: Bool {
@@ -1016,7 +1089,9 @@ struct MascotRoam: Equatable, Sendable {
             covered = false
             return
         }
+        let previous = self.field
         if settings.placement != .roam {
+            ball = nil
             let keyboardMoved = (self.field?.keyboard == nil) != (field.keyboard == nil)
             // Another stop of the model slider chosen: a place of its own, gone to by a glide as
             // a new pin is, where the same stop moved by the bar is the geometry's.
@@ -1039,12 +1114,17 @@ struct MascotRoam: Equatable, Sendable {
         // Which way the words are going is what this geometry moved them: none is a still page,
         // whatever the last scroll did.
         heading = drift
+        if drift != 0 {
+            drifting += drift
+            drifted = now
+        }
         let edge = drift != 0 && follow(drift, in: field)
         covered = isCovered
         // Riding the words to the edge of where he may stand is the end of the ride: he stops at
         // the edge, is drawn there and not past it, and decides a glide from inside his room.
         if edge {
             move = nil
+            ball = nil
             decide(glide: true)
             unsettled = true
             covered = isCovered
@@ -1057,12 +1137,24 @@ struct MascotRoam: Equatable, Sendable {
            reached.maxY > field.open.maxY + MascotRoost.epsilon
             || [field.pane, field.well].contains(where: { $0.map { MascotRoost.overlap($0, reached) } ?? false }) {
             move = nil
+            ball = nil
             decide(glide: false)
             unsettled = true
             covered = isCovered
             return
         }
-        if let move, let from = position {
+        // A shot aimed at the geometry still to come is not judged against this one, which the
+        // words have not finished moving through; only the pane, the well or the keyboard across
+        // the rest of its way turns it now, and the quiet after puts it right.
+        if let move, move.provisional, let from = position,
+           field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
+            self.move = nil
+            decide(glide: true, standing: false, scrunched: true)
+            unsettled = true
+            covered = isCovered
+            return
+        }
+        if let move, !move.provisional, let from = position {
             let destination = CGRect(origin: move.to, size: settings.size)
             // Where no place cleared the words, where he was going was the least covered one and
             // never a gap: it stands while it is a place at all, and the settle after the glide
@@ -1074,12 +1166,16 @@ struct MascotRoam: Equatable, Sendable {
             if !stands
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
                 self.move = nil
-                decide(glide: true, standing: false)
-                // A new roost within his clearance of where he was going is the same glide
-                // carried on, since the words he goes between moved and not his mind: not counted
-                // as another, and timed from where he is to where it now ends, so he does not jump
-                // the difference in one frame.
-                if let next = self.move, hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
+                decide(glide: true, standing: false, scrunched: true)
+                // A new roost within his clearance of where he was going is the same swim carried
+                // on, since the words he goes between moved and not his mind; so is any new roost
+                // while the words are still on the move that set him going (`braced`), so a drag
+                // is a swim that bends rather than a swim after a swim. Neither is counted as
+                // another, and each is bent from where he is to where it now ends.
+                if let next = self.move, braced || hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
+                    var kept = move
+                    kept.retarget(next.to, from: from)
+                    self.move = kept
                     moves -= 1
                 }
                 // The geometry may still be moving: the settled decision follows as ever.
@@ -1087,6 +1183,26 @@ struct MascotRoam: Equatable, Sendable {
                 covered = isCovered
             }
         }
+        // Something has started to move — the words scrolling, the keyboard or the pane — or a word
+        // has reached him: standing still, he balls up for a swim before anyone knows where to. A
+        // reply growing a line far from him is neither.
+        if let previous, drift != 0 || field.keyboard != previous.keyboard || field.pane != previous.pane {
+            brace(covered: false)
+        } else if covered {
+            brace(covered: true)
+        }
+    }
+
+    /// He balls up, if he may: roaming, standing somewhere with nothing under way, and not on a
+    /// geometry a ball has just found no better place on. A word over him with nothing else moving
+    /// is no reason to where no place cleared the words and he stands covered by choice: the
+    /// settle decides that, as it does for a Topo standing clear.
+    private mutating func brace(covered: Bool) {
+        guard ball == nil, move == nil, !braced, !riding, !dragging, !waiting, !settings.reduceMotion,
+              settings.placement == .roam, position != nil, let field, field != stuck else { return }
+        if covered, decision?.choice?.clears == false { return }
+        ball = now
+        braced = true
     }
 
     /// Whether the transcript is still to be read. While it is, every decision is nowhere; once it
@@ -1096,6 +1212,7 @@ struct MascotRoam: Equatable, Sendable {
         guard waiting != self.waiting else { return }
         now = max(now, time)
         self.waiting = waiting
+        if waiting { ball = nil }
         changed = now
         unsettled = true
         // A placed Topo is nowhere while the transcript is to be read, as a roaming one is.
@@ -1116,23 +1233,23 @@ struct MascotRoam: Equatable, Sendable {
         let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
             || settings.reach != self.settings.reach
         let switched = !settings.samePlace(as: self.settings)
-        // He leaves a place at the speed he was kept there at: the way home from the model slider
-        // is the swim he came by, not a stroll down the transcript.
-        let parting = switched ? max(self.settings.speed / max(settings.speed, 1), 1) : 1
         let called = settings.sliding && !self.settings.sliding, released = !settings.sliding && self.settings.sliding
         if called { calledFrom = self.settings.placement == .roam ? move?.to ?? position : nil }
         // Called before he had a place, home is where a first place is looked for from.
         let home = released ? calledFrom ?? field.map { MascotRoost.home($0, size: settings.size, reach: settings.reach) } : nil
         if !settings.sliding { calledFrom = nil }
         self.settings = settings
-        if settings.reduceMotion, let move {
-            position = move.to
-            self.move = nil
+        if settings.reduceMotion {
+            ball = nil
+            if let move {
+                position = move.to
+                self.move = nil
+            }
         }
         // Held by a finger, he is where it has him; what it lets go of is decided then.
         if dragging { return }
-        // A new policy, or a new pin, is a glide from where he stands to where it puts him, at the
-        // speed he was kept at, as a roost change is; from a pin to roaming, a roost is decided
+        // A new policy, or a new pin, is a swim from where he stands to where it puts him, in a
+        // hurry, as a roost change is; from a pin to roaming, a roost is decided
         // from where he stands, and from the model slider, the one nearest where it called him
         // from, where he hangs under the bar being nowhere he is left. A new size or clearance under a placed policy places him at once, as it does
         // when he roams. Not yet placed, he is placed at the settle.
@@ -1142,13 +1259,15 @@ struct MascotRoam: Equatable, Sendable {
                 unsettled = true
                 return
             }
-            perch(reroost ? .atOnce : .switched, pace: parting)
+            ball = nil
+            perch(reroost ? .atOnce : .switched)
             return
         }
         if switched, position != nil {
             let cut = move != nil
             move = nil
-            decide(glide: !reroost, standing: !cut && !released, toward: home, pace: parting)
+            ball = nil
+            decide(glide: !reroost, standing: !cut && !released, toward: home, hurried: true, scrunched: cut)
             leaving = move != nil
             unsettled = true
             covered = isCovered
@@ -1157,6 +1276,7 @@ struct MascotRoam: Equatable, Sendable {
         if reroost, position != nil {
             let cut = move != nil
             move = nil
+            ball = nil
             decide(glide: false, standing: !cut)
         } else if reroost || switched {
             // Not drawn: the new size may fit where the old did not, decided once it settles.
@@ -1166,16 +1286,20 @@ struct MascotRoam: Equatable, Sendable {
         covered = isCovered
     }
 
-    /// The clock at `time`: the glide moved on, whether he is covered judged where he now is, and
+    /// The clock at `time`: the swim moved on, whether he is covered judged where he now is, and
     /// the roost decided if the geometry has been quiet long enough.
     mutating func advance(to time: Double) {
         let dt = max(time - advanced, 0)
         advanced = max(advanced, time)
         now = max(now, time)
+        if dt > 0 {
+            // The words' speed is the drift since the last tick over the tick's time, since every
+            // geometry between two ticks is reported at one time.
+            if drifting != 0 { velocity += (drifting / CGFloat(dt) - velocity) * 0.5 }
+            drifting = 0
+        }
         if var move {
-            // The pace this frame is judged where he was over it: in a hurry while covered, and
-            // never under the glide's own.
-            move.elapsed += dt * Double(max(covered ? max(settings.hurry, 1) : 1, move.pace))
+            move.swim.elapsed += dt
             position = move.point
             if move.done {
                 position = move.to
@@ -1211,6 +1335,23 @@ struct MascotRoam: Equatable, Sendable {
             covered = isCovered
             return
         }
+        if braced, ball == nil, now - changed > Self.quietFor { braced = false }
+        // A guess is put right once the words have been quiet, or once they have gone as far as it
+        // carried them, whichever is first: from then on the shot is aimed at the real geometry.
+        if let move, move.provisional, now - changed > Self.quietFor || now >= move.guessed {
+            correct(move)
+            covered = isCovered
+            return
+        }
+        if ball != nil {
+            held()
+            covered = isCovered
+            if ball != nil || move != nil { return }
+        }
+        if covered, move == nil {
+            brace(covered: true)
+            if ball != nil { return }
+        }
         guard unsettled, move == nil else { return }
         let quiet = now - changed
         // A frame's quiet is a tick with no geometry since the one before, which the display
@@ -1231,6 +1372,8 @@ struct MascotRoam: Equatable, Sendable {
     /// moves with them, glide and all, as far as the edge of his room (`MascotField.room`) and no
     /// further. Answers whether the ride reached that edge, which is where it ends.
     private mutating func follow(_ drift: CGFloat, in field: MascotField) -> Bool {
+        // Until the moment a guess carried the words to, their drift is in its aim already.
+        if let move, move.provisional, now < move.guessed { return false }
         if riding, let at = position {
             let room = field.room(settings.reach)
             let lowest = max(room.maxY - settings.size.height, room.minY)
@@ -1252,14 +1395,92 @@ struct MascotRoam: Equatable, Sendable {
         return false
     }
 
+    /// The ball, a tick on: `scrunchMin` into it he shoots for the place the geometry still to come
+    /// leaves him, if anything is coming for him there — provisional while the words still move —
+    /// or, with nothing coming and the geometry quiet or the ball held `holdFor`, unscrunches. A
+    /// geometry with no better place than where he is leaves him there, and he does not ball up
+    /// again until it changes.
+    private mutating func held() {
+        guard let ball, let field, let picture else {
+            self.ball = nil
+            return
+        }
+        let held = now - ball, quiet = now - changed
+        let settled = quiet > Self.quietFor || held > Self.holdFor
+        guard held > Self.scrunchMin else { return }
+        let fresh = now - drifted < Self.freshFor
+        let guessed = !settled && fresh && velocity != 0
+        let ahead = !guessed ? field
+            : field.ahead(by: min(max(velocity * CGFloat(Self.lookahead), -Self.lookaheadLimit), Self.lookaheadLimit))
+        guard isCovered || ahead.covers(picture, reach: settings.reach) else {
+            if settled { self.ball = nil }
+            return
+        }
+        self.ball = nil
+        let decided = decision
+        let made = MascotRoost.decide(ahead, size: settings.size, clearance: settings.clearance, reach: settings.reach,
+                                      from: picture.origin)
+        // A guess with no place in it is no reason to go anywhere: the real geometry decides, at the settle.
+        guard made.roost.frame != nil else {
+            stuck = field
+            return
+        }
+        let moves = self.moves
+        // Aimed at the geometry as it is, the shot is a decision like any other, carried by the
+        // words; aimed at a guess, it is provisional until the real one is quiet.
+        decide(glide: true, on: guessed ? ahead : nil, hurried: true, scrunched: true)
+        if self.moves > moves, var move {
+            move.provisional = guessed
+            move.guessed = now + Self.lookahead
+            self.move = move
+        } else {
+            stuck = field
+            if decision == nil { decision = decided }
+        }
+    }
+
+    /// A provisional shot put right once the words have stopped or gone as far as its guess carried
+    /// them: the place nearest where it was going on the real geometry, riding the words where a
+    /// word displaces him; the shot bends to it, or, once the words are quiet and it is more than
+    /// `correction` off, he kicks toward it from where he is.
+    private mutating func correct(_ move: Move) {
+        var kept = move
+        kept.provisional = false
+        self.move = nil
+        let moves = self.moves
+        decide(glide: true, standing: false, toward: move.to, hurried: true, scrunched: true, displaced: true)
+        guard let next = self.move, self.moves > moves else {
+            // The place is within his clearance of where he is: the shot bends to end there rather
+            // than stopping him mid-stroke. With no place at all, decide left him nowhere.
+            if let here = position, let end = roost.frame?.origin, hypot(end.x - here.x, end.y - here.y) > MascotRoost.epsilon {
+                kept.retarget(end, from: here)
+                self.move = kept
+            }
+            return
+        }
+        // While the words still move, the shot bends however far off it was, a swim that turns
+        // rather than one after another; once they are quiet, one that far off is a kick.
+        let moving = now - changed <= Self.quietFor
+        if moving || hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= Self.correction, let here = position {
+            kept.retarget(next.to, from: here)
+            self.move = kept
+            self.moves = moves
+        }
+    }
+
     /// `standing` is false for a glide cut short, where he is is only somewhere he was passing,
     /// and nothing holds him there.
-    /// With `toward`, the place decided is the one nearest it rather than nearest where he stands,
-    /// and he goes there at `pace` times the stroll: the way home from the model slider.
-    private mutating func decide(glide: Bool, standing: Bool = true, toward: CGPoint? = nil, pace: CGFloat = 1) {
+    /// With `toward`, the place decided is the one nearest it rather than nearest where he stands:
+    /// the way home from the model slider, and a provisional shot put right. With `on`, it is
+    /// decided on that geometry and not the one he stands in: the one still to come. The swim is in
+    /// a hurry where `hurried` says or anything is over him, and starts at the shot where
+    /// `scrunched` says he is already a ball.
+    private mutating func decide(glide: Bool, standing: Bool = true, toward: CGPoint? = nil, on ahead: MascotField? = nil,
+                                 hurried: Bool = false, scrunched: Bool = false, displaced: Bool = false) {
         unsettled = false
         riding = false
-        guard let field else { return }
+        ball = nil
+        guard let field = ahead ?? self.field else { return }
         // Displaced by a word, he aims for its far side from where it is going — below a word
         // moving up the screen, above one moving down — so it passes over him once rather than
         // pushing him ahead of it; below a word that is not moving. The nearest gap to that aim
@@ -1267,11 +1488,11 @@ struct MascotRoam: Equatable, Sendable {
         let margin = settings.clearance.isFinite ? max(settings.clearance, 0) : 0
         var aim = toward ?? position
         var displacer: CGRect?
-        if toward == nil, let picture, let word = field.displacer(of: picture, clearance: margin) {
+        if toward == nil || displaced, let picture, let word = field.displacer(of: picture, clearance: margin) {
             displacer = word
-            aim = heading > 0
+            if toward == nil { aim = heading > 0
                 ? CGPoint(x: picture.minX, y: word.minY - margin - settings.size.height)
-                : CGPoint(x: picture.minX, y: word.maxY + margin)
+                : CGPoint(x: picture.minX, y: word.maxY + margin) }
         }
         if waiting {
             decision = nil
@@ -1322,7 +1543,8 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         roost = next
-        // On the side of the word it is moving toward, he goes with the words until they stop.
+        // On the side of the word it is moving toward, he goes with the words until they stop (a
+        // shot at the geometry still to come from the moment its guess carried them to).
         if let displacer, heading != 0 {
             riding = heading < 0 ? to.y + settings.size.height <= displacer.minY + MascotRoost.epsilon
                                  : to.y >= displacer.maxY - MascotRoost.epsilon
@@ -1333,8 +1555,8 @@ struct MascotRoam: Equatable, Sendable {
             position = to
             return
         }
-        let speed = max(settings.speed, 1)
-        move = Move(from: from, to: to, duration: Double(distance / speed), pace: pace)
+        move = Move(from: from, to: to, stride: settings.stride,
+                    pace: hurried || isCovered ? Double(max(settings.hurry, 1)) : 1, scrunched: scrunched)
         moves += 1
     }
 
@@ -1346,6 +1568,7 @@ struct MascotRoam: Equatable, Sendable {
         visited = beside.serial
         unsettled = false
         riding = false
+        ball = nil
         heading = 0
         guard let field else { return }
         let made = MascotRoost.beside(beside.frame, in: field, size: settings.size, clearance: settings.clearance,
@@ -1363,27 +1586,25 @@ struct MascotRoam: Equatable, Sendable {
             move = nil
             return
         }
-        glide(from: from, to: to, pace: 1)
+        glide(from: from, to: to, hurried: false, scrunched: move != nil)
     }
 
     /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
-    /// placement (`atOnce`); a new policy or pin is a glide (`switched`); the
-    /// keyboard coming or going under a pin is a glide, at the hurry up and the stroll back
-    /// (`keyboard`); any other geometry moves him with it at once, or turns a glide under way
-    /// toward where he now goes (`geometry`).
+    /// placement (`atOnce`); a new policy or pin is a swim (`switched`); the keyboard coming or
+    /// going under a pin is a swim, hurried both ways (`keyboard`); any other geometry moves him
+    /// with it at once, or bends a swim under way toward where he now goes (`geometry`).
     enum Arrival: Equatable, Sendable { case atOnce, switched, keyboard, geometry }
 
     /// Where the look places him, when it does: the glass or the pin, from the geometry as it is,
     /// arriving as `arrival` says. On the glass he rides the pane, placed at once wherever it goes
     /// but for a new policy, which is the one glide. At a pin, the keyboard coming up over him
-    /// sends him clear of it at the hurry, and its going sends him back to the pin at the stroll;
-    /// the pin itself is the look's and nothing here writes it. A new policy's glide is at `parting`
-    /// times the stroll. A glide under way is turned toward
-    /// where he now goes at its own pace, and at the hurry once the keyboard is up; on the short
-    /// glass it ends where he goes. He faces the
+    /// sends him clear of it and its going sends him back to the pin, each a hurried swim; the pin
+    /// itself is the look's and nothing here writes it. A new policy's swim is hurried. A swim under
+    /// way is bent toward where he now goes, at its own pace; on the short glass it ends where he
+    /// goes. He faces the
     /// half of the transcript his box's centre is in, as he does roaming. With no pane to stand on,
     /// or no transcript to be pinned in, he stands nowhere and is not drawn.
-    private mutating func perch(_ arrival: Arrival, pace parting: CGFloat = 1) {
+    private mutating func perch(_ arrival: Arrival) {
         unsettled = false
         riding = false
         heading = 0
@@ -1407,22 +1628,20 @@ struct MascotRoam: Equatable, Sendable {
             move = nil
             return
         }
-        // The hurry is a pin's the keyboard came up over; under the slider he is at the swim.
-        let hurried = settings.placement == .pinned && !settings.sliding && field.keyboard != nil ? max(settings.hurry, 1) : 1
         if arrival == .switched {
-            glide(from: from, to: to, pace: parting)
-        } else if let move {
+            glide(from: from, to: to, hurried: true, scrunched: move != nil)
+        } else if var move {
             guard hypot(move.to.x - to.x, move.to.y - to.y) > MascotRoost.epsilon else { return }
-            // The same glide, turned: not counted as another.
-            glide(from: from, to: to, pace: max(move.pace, hurried))
-            moves -= 1
+            // The same swim, bent to where he now goes: not another.
+            move.retarget(to, from: from)
+            self.move = move
         } else if hypot(to.x - from.x, to.y - from.y) <= MascotRoost.epsilon {
             // Where he is, to a rounding: a pin read back from the place a drag left him. His roost
             // is where he stands, so the two are the same frame.
             roost = settings.placement == .glass ? .glass(CGRect(origin: from, size: settings.size))
                 : .pinned(CGRect(origin: from, size: settings.size))
         } else if arrival == .keyboard, settings.placement == .pinned {
-            glide(from: from, to: to, pace: hurried)
+            glide(from: from, to: to, hurried: true)
         } else {
             position = to
         }
@@ -1442,16 +1661,17 @@ struct MascotRoam: Equatable, Sendable {
         }
     }
 
-    /// One glide from `from` to `to` at `pace` times the stroll at the least; under Reduce Motion,
-    /// or for no distance at all, a placement.
-    private mutating func glide(from: CGPoint, to: CGPoint, pace: CGFloat) {
+    /// One swim from `from` to `to`, in a hurry or at the cruise, starting at the shot where he is
+    /// already a ball; under Reduce Motion, or for no distance at all, a placement.
+    private mutating func glide(from: CGPoint, to: CGPoint, hurried: Bool, scrunched: Bool = false) {
         let distance = hypot(to.x - from.x, to.y - from.y)
         guard !settings.reduceMotion, distance > MascotRoost.epsilon else {
             position = to
             move = nil
             return
         }
-        move = Move(from: from, to: to, duration: Double(distance / max(settings.speed, 1)), pace: pace)
+        move = Move(from: from, to: to, stride: settings.stride, pace: hurried ? Double(max(settings.hurry, 1)) : 1,
+                    scrunched: scrunched)
         moves += 1
     }
 
@@ -1476,6 +1696,7 @@ struct MascotRoam: Equatable, Sendable {
         drags += 1
         pickedUp = position
         move = nil
+        ball = nil
         riding = false
         unsettled = false
         covered = false
@@ -1517,8 +1738,8 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// The press was cancelled — a call, an alert, the system taking the touch — rather than let
-    /// go: nothing is pinned, and he goes back to where his policy puts him, with a glide at the
-    /// stroll, or, roaming, to a roost decided from where the finger left him.
+    /// go: nothing is pinned, and he goes back to where his policy puts him with a hurried swim,
+    /// or, roaming, to a roost decided from where the finger left him.
     mutating func cancelDrag() {
         guard dragging else { return }
         dragging = false
@@ -1526,7 +1747,7 @@ struct MascotRoam: Equatable, Sendable {
             perch(.switched)
         } else {
             move = nil
-            decide(glide: true)
+            decide(glide: true, hurried: true)
             covered = isCovered
         }
     }

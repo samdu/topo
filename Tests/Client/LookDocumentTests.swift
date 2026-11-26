@@ -165,38 +165,38 @@ final class LookDocumentTests: XCTestCase {
     /// would otherwise be a padding of one point.
     /// Topo's fields are read in ranges of their own: a scale under a quarter or over four, a
     /// frame that lasts no time or over a second (the rest's too), a rest of over ten seconds, a clearance over 64 points or under none, a
-    /// speed under 10 points a second (he would never arrive) or over 400, a hurry under 1 or over 20, a settle under a tenth
+    /// stroke under 30 points or over 200, a hurry under 1 or over 3, a settle under a tenth
     /// of a second or over five, are refused, each alone; the ends of each range are taken. The
     /// fields that placed him on the flank or faded him are no longer his.
     func testTopoIsReadInItsOwnRanges() {
-        let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "restInterval": 0, "restAfter": 11, "clearance": -1, "roamSpeed": 9, "hurry": 0.5, "roamSettle": 0.05}}"#)
+        let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "restInterval": 0, "restAfter": 11, "clearance": -1, "stride": 29, "hurry": 0.5, "roamSettle": 0.05}}"#)
         XCTAssertEqual(reading.look.mascot, Look.Mascot())
         XCTAssertEqual(reading.notes.count, 8, "\(reading.notes)")
-        let high = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "restInterval": 1, "restAfter": 10, "clearance": 64, "roamSpeed": 400, "hurry": 20, "roamSettle": 5}}"#)
+        let high = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "restInterval": 1, "restAfter": 10, "clearance": 64, "stride": 200, "hurry": 3, "roamSettle": 5}}"#)
         XCTAssertEqual(high.notes, [])
         XCTAssertEqual(high.look.mascot.scale, 4)
         XCTAssertEqual(high.look.mascot.frameInterval, 1)
         XCTAssertEqual(high.look.mascot.restInterval, 1)
         XCTAssertEqual(high.look.mascot.restAfter, 10)
         XCTAssertEqual(high.look.mascot.clearance, 64)
-        XCTAssertEqual(high.look.mascot.roamSpeed, 400)
+        XCTAssertEqual(high.look.mascot.stride, 200)
         XCTAssertEqual(high.look.mascot.roamSettle, 5)
-        XCTAssertEqual(high.look.mascot.hurry, 20)
-        let low = LookDocument.read(#"{"mascot": {"scale": 0.25, "frameInterval": 0.008333333333333333, "restInterval": 0.008333333333333333, "restAfter": 0, "clearance": 0, "roamSpeed": 10, "hurry": 1, "roamSettle": 0.1}}"#)
+        XCTAssertEqual(high.look.mascot.hurry, 3)
+        let low = LookDocument.read(#"{"mascot": {"scale": 0.25, "frameInterval": 0.008333333333333333, "restInterval": 0.008333333333333333, "restAfter": 0, "clearance": 0, "stride": 30, "hurry": 1, "roamSettle": 0.1}}"#)
         XCTAssertEqual(low.notes, [])
         XCTAssertEqual(low.look.mascot.scale, 0.25)
         XCTAssertEqual(low.look.mascot.restInterval, 1.0 / 120)
         XCTAssertEqual(low.look.mascot.restAfter, 0)
         XCTAssertEqual(low.look.mascot.clearance, 0)
-        XCTAssertEqual(low.look.mascot.roamSpeed, 10)
+        XCTAssertEqual(low.look.mascot.stride, 30)
         XCTAssertEqual(low.look.mascot.roamSettle, 0.1)
         XCTAssertEqual(low.look.mascot.hurry, 1)
-        for key in ["clearance", "roamSpeed", "hurry", "roamSettle", "scale", "restInterval", "restAfter"] {
+        for key in ["clearance", "stride", "hurry", "roamSettle", "scale", "swimInterval", "workInterval", "restInterval", "restAfter"] {
             let past = LookDocument.read(#"{"mascot": {"\#(key)": 4000}}"#)
             XCTAssertEqual(past.look.mascot, Look.Mascot(), key)
             XCTAssertEqual(past.notes.count, 1, "\(key): \(past.notes)")
         }
-        for gone in ["offset", "stroll", "bobAmplitude", "bobPeriod", "hideDuration"] {
+        for gone in ["offset", "stroll", "bobAmplitude", "bobPeriod", "hideDuration", "roamSpeed", "swimSpeed"] {
             let old = LookDocument.read(#"{"mascot": {"\#(gone)": 1}}"#)
             XCTAssertEqual(old.look.mascot, Look.Mascot(), gone)
             XCTAssertEqual(old.notes, ["mascot.\(gone) is not a field of the look"])
@@ -413,13 +413,13 @@ final class LookDocumentTests: XCTestCase {
                         "flank": { "keyboardDown": "pencil.slash", "muted": "bell.slash" } },
           "bar": { "spacing": "wide" },
           "reading": { "surface": "#000000" },
-          "mascot": { "roamSpeed": 60 } }
+          "mascot": { "stride": 60 } }
         """)
         XCTAssertEqual(reading.notes, [])
         XCTAssertEqual(reading.state, .read(fields: 3))
         XCTAssertEqual(reading.look.composer.spacing, 31)
         XCTAssertEqual(reading.look.composer.flank.muted, "bell.slash")
-        XCTAssertEqual(reading.look.mascot.roamSpeed, 60)
+        XCTAssertEqual(reading.look.mascot.stride, 60)
     }
 
     /// A control's mark is a symbol the system has: a name it has not is refused and the compiled

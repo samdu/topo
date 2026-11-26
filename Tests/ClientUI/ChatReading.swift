@@ -33,7 +33,7 @@ enum ChatReading {
         var frame: [Double]?
         var to: [Double]?
         var hidden = true
-        var walking = false
+        var swimming = false
         var covered = false
         var moves = 0
         var pane: [Double]?
@@ -72,11 +72,11 @@ enum ChatReading {
         }
 
         var description: String {
-            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? []) decision \(decision.map { "chosen \($0.chosen ?? []) clears \($0.clears.map(String.init) ?? "-") cost \($0.cost ?? -1) of \($0.candidates), \($0.clearing) clear" } ?? "none") trail \(trail.suffix(30))"
+            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) swimming \(swimming) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? []) decision \(decision.map { "chosen \($0.chosen ?? []) clears \($0.clears.map(String.init) ?? "-") cost \($0.cost ?? -1) of \($0.candidates), \($0.clearing) clear" } ?? "none") trail \(trail.suffix(30))"
         }
 
         /// Standing still where his roost has him.
-        var standing: Bool { !hidden && !walking && !dragging && frame != nil && frame == to }
+        var standing: Bool { !hidden && !swimming && !dragging && frame != nil && frame == to }
 
         var box: CGRect? { frame.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) } }
         var paneRect: CGRect? { pane.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) } }

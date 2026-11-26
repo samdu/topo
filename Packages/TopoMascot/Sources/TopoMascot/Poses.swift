@@ -148,6 +148,8 @@ struct Pose {
     var motion: [(arm: Int, param: Int, amp: Double, hz: Double)] = []
     var still: [Int] = [], rigid: [Int] = []
     var lift: Double? = nil, sway: Double? = nil, head: (Double, Double)? = nil
+    /// The swim's shot and glide: the arms are swung each update to stream along the input's `trail` (`aimed`).
+    var aim = false
     var params: [Float] { (R + L).flatMap { $0.map { Float($0) } } }
 }
 private func A(_ x: Double, _ y: Double, _ th: Double, _ L: Double, _ k0: Double, _ k1: Double, _ k2: Double, _ k3: Double, _ layer: Double = 0) -> [Double] {
@@ -156,7 +158,8 @@ private func A(_ x: Double, _ y: Double, _ th: Double, _ L: Double, _ k0: Double
 private let REST_R = [A(8, 0, 4, 19, 0, 20, -120, -300, -1), A(7, 1, 12, 22, 20, 190, 40, -300), A(5, 2, 50, 17, 110, 10, -80, -280), A(2, 2, 80, 14, 20, 20, -60, -260)]
 private let REST_L = [A(8, 0, 6, 17, 0, 10, -100, -320, -1), A(7, 1, 16, 20, 30, 210, 30, -280), A(5, 2, 54, 19, 90, 20, -60, -300), A(2, 2, 84, 13, 0, 30, -40, -250)]
 
-let POSE_ORDER = ["front", "shelf", "walk", "corner", "yoga", "sign", "building", "writing", "calendar", "searching", "thinking"]
+let POSE_ORDER = ["front", "shelf", "walk", "corner", "yoga", "sign", "building", "writing", "calendar", "searching", "thinking",
+                  "swimOpen", "swimThrust", "swimTrail"]
 let POSES: [String: Pose] = [
     "front": Pose(
         R: [A(7, -2, -42, 22, 60, 30, -150, -400, -1), A(8, 1, -5, 22, -40, 10, 120, 360, -1), A(6, 2, 48, 21, -50, 0, 60, -360), A(2, 3, 78, 20, 60, -80, -40, -340)],
@@ -206,4 +209,49 @@ let POSES: [String: Pose] = [
         R: [A(8, 0, 10, 16, 40, 120, -200, -420, -1), A(7, 1, 30, 17, 60, 200, -100, -400), A(5, 2, 60, 14, 100, 0, -200, -380), A(2, 2, 84, 12, 20, 20, -160, -360)],
         L: [A(8, 0, 12, 15, 40, 120, -200, -420, -1), A(7, 1, 34, 16, 60, 200, -100, -400), A(5, 2, 62, 13, 100, 0, -200, -380), A(5, 3, 100, 20, 200, 330, 300, 120, 1)],
         face: Face(gaze: (-1, -1), mouth: "flat", brow: "cocked"), motion: [(7, 6, 40, 0.7)], still: [7], sway: 35, head: (1, 0)),
+    // The swim, one stroke of a jet in three poses the host switches between (samdu/experiments topo-swim):
+    // the scrunch, every arm curled in tight under him, a ball, his head ducked
+    "swimOpen": Pose(
+        R: [A(6, 0, 50, 15, 150, 260, 300, 260, -1), A(5, 1, 62, 16, 160, 280, 300, 240), A(4, 2, 74, 15, 170, 280, 280, 220), A(2, 2, 86, 14, 180, 280, 260, 200)],
+        L: [A(6, 0, 50, 15, 150, 260, 300, 260, -1), A(5, 1, 62, 16, 160, 280, 300, 240), A(4, 2, 74, 15, 170, 280, 280, 220), A(2, 2, 86, 14, 180, 280, 260, 200)],
+        face: Face(gaze: (0, 0), mouth: "o"), lift: 0, sway: 6, head: (0, 3)),
+    // the shot, arms thrown out straight behind him, close together; aimed along `trail`
+    "swimThrust": Pose(
+        R: [A(5, 0, 84, 26, 0, -4, -4, 0, -1), A(4, 1, 89, 28, 0, -3, -3, 0), A(3, 2, 93, 28, -3, -4, -3, 0), A(1, 2, 97, 26, -4, -6, -3, 0)],
+        L: [A(5, 0, 84, 26, 0, -4, -4, 0, -1), A(4, 1, 89, 28, 0, -3, -3, 0), A(3, 2, 93, 28, -3, -4, -3, 0), A(1, 2, 97, 26, -4, -6, -3, 0)],
+        face: Face(eyes: "happy", gaze: (0, 0)), lift: 14, sway: 8, aim: true),
+    // the glide, arms streamed behind, loosening, a slow wave down them; aimed along `trail`
+    "swimTrail": Pose(
+        R: [A(8, -1, 62, 26, 10, 20, 10, -10, -1), A(7, 1, 74, 28, 6, 14, 6, -8), A(5, 2, 86, 27, 0, 8, 4, -6), A(2, 2, 98, 24, -6, 0, 0, -4)],
+        L: [A(8, -1, 62, 26, 10, 20, 10, -10, -1), A(7, 1, 74, 28, 6, 14, 6, -8), A(5, 2, 86, 27, 0, 8, 4, -6), A(2, 2, 98, 24, -6, 0, 0, -4)],
+        face: Face(gaze: (0, 0)), lift: 14, sway: 45, aim: true),
 ]
+
+// ── the swim's aim ──────────────────────────────────────────────────────────────
+// A pose marked `aim` has its arms swung each update so they stream away from the way he is going:
+// `trail` is that direction in degrees in his own picture, before any turn the host puts on it (0 right,
+// 90 down, -90 up), the picture as drawn facing left. Each side's arms are aimed in that side's own frame
+// (the left side is written mirrored), and held to the arc that side can reach without crossing his face,
+// from up-and-out (-64) round through down and under him to the far side (150); where the arc stops them
+// they spread instead of stacking. Facing right the picture is mirrored, so the trail is mirrored before
+// it is aimed and the arms stream the same way on the screen.
+private let AIM_LO = -64.0, AIM_HI = 150.0
+private func aimNorm(_ a: Double) -> Double { (a + 540).truncatingRemainder(dividingBy: 360) - 180 }
+private func aimSide(_ arms: [[Double]], _ phi: Double) -> [[Double]] {
+    arms.enumerated().map { i, a in
+        var b = a
+        let want = aimNorm(phi) + (a[2] - 90)
+        let th = want < AIM_LO || want > AIM_HI
+            ? (abs(aimNorm(want - AIM_HI)) < abs(aimNorm(want - AIM_LO)) ? AIM_HI - Double(i) * 10 : AIM_LO + Double(i) * 9) : want
+        b[2] = max(AIM_LO, min(AIM_HI, th))
+        return b
+    }
+}
+func aimed(_ pose: Pose, trail: Double, mirrored: Bool) -> Pose {
+    guard pose.aim else { return pose }
+    let t = mirrored ? 180 - trail : trail
+    var out = pose
+    out.R = aimSide(pose.R, t)
+    out.L = aimSide(pose.L, 180 - t)
+    return out
+}

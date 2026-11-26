@@ -189,18 +189,27 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     private let sprite = CALayer()
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
-    /// What a frame lasts while he does anything, and once he has rested `restAfter` seconds
-    /// (`Look.Mascot.frameInterval`, `restInterval`, `restAfter`).
+    /// What a frame lasts while he swims, while he works, while he idles, and once he has rested
+    /// `restAfter` seconds (`Look.Mascot.swimInterval`, `workInterval`, `frameInterval`,
+    /// `restInterval`, `restAfter`).
+    private var swimInterval = Look.Mascot().swimInterval
+    private var workInterval = Look.Mascot().workInterval
     private var interval = Look.Mascot().frameInterval
     private var restInterval = Look.Mascot().restInterval
     private var restAfter = Look.Mascot().restAfter
-    /// The clock's reading when his rest began — idle, not gliding, no finger on him — and nil
+    /// The clock's reading when his rest began — idle, not swimming, no finger on him — and nil
     /// while he does anything. The clock stops with the link, so a rest goes on across his being
     /// hidden and he is not woken to the look's rate by coming back.
     private var restingSince: Double?
-    /// What a frame lasts now: `restInterval` once he has rested `restAfter`, `interval` otherwise.
+    /// What a frame lasts now: `swimInterval` while he swims or rights himself after a swim, `workInterval` while he wears a pose
+    /// of a turn's, `restInterval` once he has rested `restAfter`, `interval` otherwise.
     private(set) var cadence = Look.Mascot().frameInterval
-    /// What he stands for, before the walk is put on him for a glide.
+    /// Which way his picture is turned: his head leads where he swims.
+    private(set) var lean = MascotLean()
+    /// Where his arms trailed in his own picture as his last swim ended, from where they come in
+    /// to straight behind him (90°) while he rights himself after it.
+    private var lastTrail: Double?
+    /// What he stands for, before the swim is put on him.
     private var input = TopoInput()
     /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he stands anywhere.
     private var told = MascotDriver.Conditions()
@@ -261,7 +270,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         sprite.minificationFilter = .nearest
         // The layer is moved every frame; an implicit animation would smear what is pixels.
         sprite.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "frame": NSNull(),
-                          "opacity": NSNull()]
+                          "opacity": NSNull(), "transform": NSNull(), "anchorPoint": NSNull()]
         sprite.opacity = 0
         stage.masksToBounds = true
         stage.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull()]
@@ -276,9 +285,12 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// and whether he is covered is judged against it before anything is drawn.
     /// `ready` is whether the transcript has been read once: until then he is not drawn.
     func apply(input: TopoInput, field: MascotField?, settings: MascotRoam.Settings, interval: Double,
+               swimInterval: Double = Look.Mascot().swimInterval, workInterval: Double = Look.Mascot().workInterval,
                restInterval: Double = Look.Mascot().restInterval, restAfter: Double = Look.Mascot().restAfter,
                ready: Bool = true, conditions: MascotDriver.Conditions) {
         self.input = input
+        self.swimInterval = swimInterval
+        self.workInterval = workInterval
         self.interval = interval
         self.restInterval = restInterval
         self.restAfter = restAfter
@@ -299,10 +311,14 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
 
     /// His box where the roam has it now, in the canvas: what the roost holds.
     var spriteFrame: CGRect { roam?.picture ?? .zero }
-    /// The whole of the engine's picture as the layer draws it, round that box, in the canvas.
+    /// The whole of the engine's picture as the layer draws it, round that box, in the canvas, as
+    /// it stands upright: the lean turns it about his pivot inside the reach (`MascotSprite.pivot`).
     var drawnFrame: CGRect {
-        guard let parent = sprite.superlayer else { return sprite.frame }
-        return parent.convert(sprite.frame, to: layer)
+        let upright = CGRect(x: sprite.position.x - sprite.anchorPoint.x * sprite.bounds.width,
+                             y: sprite.position.y - sprite.anchorPoint.y * sprite.bounds.height,
+                             width: sprite.bounds.width, height: sprite.bounds.height)
+        guard let parent = sprite.superlayer else { return upright }
+        return parent.convert(upright, to: layer)
     }
     /// Whether he is drawn in the glass's stage rather than over the chat.
     var onGlassStage: Bool { sprite.superlayer != nil && sprite.superlayer === glass?.view?.layer }
@@ -418,8 +434,8 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         sync()
     }
 
-    /// The roam's answer handed to what draws him: the walk while he glides and his own activity
-    /// otherwise, the driver told whether he stands anywhere, the layer put where he is and shown
+    /// The roam's answer handed to what draws him: the stroke's pose while he swims, his arms
+    /// trailing away from the way he goes, and his own activity otherwise, the driver told whether he stands anywhere, the layer put where he is and shown
     /// or not with it, and the link run exactly while something needs it. Nothing over him hides
     /// him: he is drawn above everything in the chat, and only the keyboard is above him.
     private func sync() {
@@ -428,28 +444,46 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         conditions.onScreen = window != nil
         conditions.hidden = roam.hidden
         var worn = input
-        // The engine walks along its own shelf; where he is on the screen is the roam's, so the
-        // stroll goes nowhere and a glide is the walk worn in place. Holding a sign, he glides
-        // holding it: the words stay up for as long as he is handed them.
+        // Where he is on the screen is the roam's, so the engine's own stroll along its shelf goes
+        // nowhere, and a swim is the stroke's pose worn where the roam has him. Holding a sign, he
+        // swims holding it, upright: the words stay up for as long as he is handed them.
         worn.corner = 0
-        if roam.walking, worn.sign == nil {
-            worn.activity = "walk"
+        let swimming = roam.swimming && worn.sign == nil
+        // Arrived, he tips back upright still in the glide, his arms coming in from where they
+        // trailed to straight behind him, and takes up what he was doing once he is upright: no
+        // other pose is drawn turned.
+        let righting = !swimming && worn.sign == nil && lean.angle != 0
+        if swimming, let phase = roam.phase {
+            worn.activity = phase.rawValue
+            if let course = roam.course { worn.trail = lean.trail(course) }
+            lastTrail = worn.trail ?? lastTrail
+        } else if righting {
+            worn.activity = MascotSwim.Phase.trail.rawValue
+            worn.trail = lastTrail
         }
         if driver.input.activity != worn.activity || driver.input.model != worn.model
             || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0
-            || driver.input.facing != worn.facing {
+            || driver.input.facing != worn.facing || (worn.trail != nil && driver.input.trail != worn.trail) {
             driver.input = worn
         }
         driver.conditions = conditions
-        // His rest is the idle pose with no finger on him: a turn, a sign and a glide (the walk)
-        // are each something else. Rested `restAfter` by the clock, his frames come at the rest's
-        // rate; anything else brings the look's back on the frame it is seen.
-        if worn.activity == "idle", !roam.dragging {
+        // His rest is the idle pose with no finger on him: a turn, a sign and a swim are each
+        // something else. Rested `restAfter` by the clock, his frames come at the rest's rate; a
+        // swim brings the swim's on the frame it is seen, a turn's pose the work's, and anything
+        // else the look's.
+        if worn.activity == "idle", !roam.dragging, !swimming, !righting {
             restingSince = restingSince ?? clock
         } else {
             restingSince = nil
         }
-        cadence = restingSince.map { clock - $0 >= restAfter } == true ? max(restInterval, interval) : interval
+        if swimming || righting {
+            cadence = swimInterval
+        } else if worn.activity != "idle", worn.sign == nil {
+            cadence = workInterval
+        } else {
+            cadence = restingSince.map { clock - $0 >= restAfter } == true ? max(restInterval, interval) : interval
+        }
+        if roam.hidden || roam.settings.reduceMotion || worn.sign != nil { lean.reset() }
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -460,13 +494,13 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
             if sprite.superlayer !== view.layer { view.layer.addSublayer(sprite) }
             stage.frame = bounds
             if let picture = roam.picture {
-                sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -rect.minX, dy: -rect.minY)
+                place(MascotSprite.drawn(around: picture).offsetBy(dx: -rect.minX, dy: -rect.minY))
             }
         } else {
             if sprite.superlayer !== stage { stage.addSublayer(sprite) }
             stage.frame = clip(roam) ?? bounds
             if let picture = roam.picture {
-                sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -stage.frame.minX, dy: -stage.frame.minY)
+                place(MascotSprite.drawn(around: picture).offsetBy(dx: -stage.frame.minX, dy: -stage.frame.minY))
             }
         }
         sprite.opacity = roam.hidden ? 0 : 1
@@ -478,10 +512,20 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         report(roam)
     }
 
-    /// The glass's stage and where it is in the canvas, while he stands on the glass, not gliding
+    /// The layer put at `drawn`, his whole picture upright, and turned by the lean about his pivot.
+    private func place(_ drawn: CGRect) {
+        sprite.setAffineTransform(.identity)
+        sprite.anchorPoint = MascotSprite.pivot
+        sprite.bounds = CGRect(origin: .zero, size: drawn.size)
+        sprite.position = CGPoint(x: drawn.minX + MascotSprite.pivot.x * drawn.width,
+                                  y: drawn.minY + MascotSprite.pivot.y * drawn.height)
+        sprite.setAffineTransform(CGAffineTransform(rotationAngle: CGFloat(lean.angle)))
+    }
+
+    /// The glass's stage and where it is in the canvas, while he stands on the glass, not swimming
     /// and not in a finger, and SwiftUI has put the stage in the window.
     private func glassStage(_ roam: MascotRoam) -> (UIView, CGRect)? {
-        guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
+        guard case .glass = roam.roost, !roam.swimming, !roam.dragging, let field = roam.field,
               let view = glass?.view, view.window != nil, view.window === window,
               let rect = MascotPerch.glassStage(field, size: roam.settings.size, inset: roam.settings.perch,
                                                 reach: roam.settings.reach) else { return nil }
@@ -492,7 +536,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// not in a finger, what is above the pane, so no pose is drawn on it; the whole canvas
     /// otherwise.
     private func clip(_ roam: MascotRoam) -> CGRect? {
-        guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
+        guard case .glass = roam.roost, !roam.swimming, !roam.dragging, let field = roam.field,
               let slot = MascotPerch.glassSlot(field)?.intersection(bounds), !slot.isNull else { return nil }
         return slot
     }
@@ -538,11 +582,12 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         CATransaction.commit()
     }
 
-    /// The link runs while he animates, or while his roam has a glide or a decision waiting on the
-    /// clock, and not a frame longer: a Topo standing nowhere with nothing to decide asks for nothing.
+    /// The link runs while he animates, while his roam has a swim or a decision waiting on the
+    /// clock, or while he is still righting himself, and not a frame longer: a Topo standing nowhere with nothing to decide asks for nothing.
     /// It asks for `cadence`, and the display gives the nearest rate it has in reach of it.
     private func reschedule() {
-        let wanted = driver.conditions.animates || (driver.conditions.present && (roam?.needsTime ?? false))
+        let wanted = driver.conditions.animates
+            || (driver.conditions.present && ((roam?.needsTime ?? false) || lean.angle != 0))
         if wanted {
             let fps = Float(1 / cadence)
             if let link {
@@ -588,6 +633,15 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         #if DEBUG
         if let roam { MascotTrace.shared?.advanced(roam, at: clock) }
         #endif
+        // His head leads while he is under way; arrived, or balled with nowhere yet, he rights himself.
+        if let roam {
+            let swimming = roam.swimming && input.sign == nil
+            lean.step(dt, heading: swimming ? roam.course : nil)
+            // Righting himself, his arms come in to straight behind him as he comes upright.
+            if !swimming, lean.angle != 0, let trail = lastTrail {
+                lastTrail = MascotLean.righting(trail, dt)
+            }
+        }
         sync()
         driver.tick(dt)
     }
@@ -649,7 +703,7 @@ extension MascotRoam {
         var frame: [Double]?
         var to: [Double]?
         var hidden: Bool
-        var walking: Bool
+        var swimming: Bool
         var covered: Bool
         var moves: Int
         var pane: [Double]?
@@ -726,7 +780,7 @@ extension MascotRoam {
     var report: Report {
         func numbers(_ rect: CGRect) -> [Double] { [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) } }
         return Report(roost: roost.name, frame: picture.map(numbers), to: roost.frame.map(numbers),
-                      hidden: hidden, walking: walking, covered: covered, moves: moves,
+                      hidden: hidden, swimming: swimming, covered: covered, moves: moves,
                       pane: field?.pane.map(numbers), placement: settings.placement.rawValue, dragging: dragging,
                       drags: drags, pin: [Double(settings.pin.x), Double(settings.pin.y)],
                       well: field?.well.map(numbers), visible: field.map { numbers($0.visible) },
@@ -776,7 +830,7 @@ final class MascotTrace: @unchecked Sendable {
         var frame: CGRect?
         var to: CGRect?
         var covered: Bool?
-        var walking: Bool?
+        var swimming: Bool?
         var moves: Int?
         var decision: MascotRoost.Decision?
     }
@@ -784,7 +838,7 @@ final class MascotTrace: @unchecked Sendable {
     func observed(_ field: MascotField, at time: Double) { write(Line(t: time, field: field)) }
 
     func advanced(_ roam: MascotRoam, at time: Double) {
-        write(Line(t: time, frame: roam.picture, to: roam.roost.frame, covered: roam.covered, walking: roam.walking,
+        write(Line(t: time, frame: roam.picture, to: roam.roost.frame, covered: roam.covered, swimming: roam.swimming,
                    moves: roam.moves))
     }
 
@@ -863,6 +917,8 @@ struct MascotOverChat: UIViewRepresentable {
     var field: MascotField?
     var settings: MascotRoam.Settings
     var interval: Double
+    var swimInterval = Look.Mascot().swimInterval
+    var workInterval = Look.Mascot().workInterval
     var restInterval: Double
     var restAfter: Double
     var ready = true
@@ -882,6 +938,7 @@ struct MascotOverChat: UIViewRepresentable {
         canvas.onFace = face
         canvas.onPin = pin
         canvas.apply(input: input, field: field, settings: settings, interval: interval,
+                     swimInterval: swimInterval, workInterval: workInterval,
                      restInterval: restInterval, restAfter: restAfter, ready: ready, conditions: conditions)
     }
 
@@ -973,10 +1030,11 @@ struct MascotLayer: View {
             let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, perch: look.composer.perchInset,
                                                                    reduceMotion: reduceMotion,
                                                                    within: MascotSprite.reach(sign: state.sign)),
-                                               under: field, swim: look.mascot.swimSpeed)
+                                               under: field)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
-                               interval: look.mascot.frameInterval, restInterval: look.mascot.restInterval,
+                               interval: look.mascot.frameInterval, swimInterval: look.mascot.swimInterval,
+                               workInterval: look.mascot.workInterval, restInterval: look.mascot.restInterval,
                                restAfter: look.mascot.restAfter, ready: ready,
                                conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                                  reduceMotion: reduceMotion),

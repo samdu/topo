@@ -30,6 +30,8 @@ final class WebAuthTests: XCTestCase {
         /// Whether the system takes the next sheets begun.
         var takes = true
         var dismissed: [String] = []
+        /// What each sheet's `onShown` said, in order.
+        var shown: [String] = []
 
         init() {
             web.isActive = { [unowned self] in active }
@@ -42,7 +44,9 @@ final class WebAuthTests: XCTestCase {
         }
 
         func open(_ name: String) {
-            web.open(URL(string: "https://example.com/\(name)")!) { [unowned self] in dismissed.append(name) }
+            web.open(URL(string: "https://example.com/\(name)")!) { [unowned self] up in
+                shown.append("\(name) \(up ? "up" : "refused")")
+            } onDismiss: { [unowned self] in dismissed.append(name) }
         }
     }
 
@@ -75,6 +79,32 @@ final class WebAuthTests: XCTestCase {
         stage.sheets[2].ended(.dismissed)
         await settle()
         XCTAssertEqual(stage.dismissed, ["again"])
+    }
+
+    /// A sheet says it is over the app when the system takes it, which for one asked for while the
+    /// app was not active is at the activation, and says so no longer when the system refuses it
+    /// after all; one refused at its start never said it was up.
+    func testASheetSaysWhenItIsOverTheApp() async {
+        let stage = Stage()
+        stage.active = false
+        stage.open("device")
+        XCTAssertEqual(stage.shown, [], "a sheet waiting for the app said it was up")
+        stage.active = true
+        stage.web.activated()
+        XCTAssertEqual(stage.shown, ["device up"])
+        stage.sheets[0].ended(.refused)
+        await settle()
+        XCTAssertEqual(stage.shown, ["device up", "device refused", "device up"],
+                       "the sheet taken again once refused did not say it was up")
+
+        let refusing = Stage()
+        refusing.takes = false
+        refusing.open("device")
+        await settle()
+        XCTAssertEqual(refusing.shown, ["device refused", "device refused"], "a sheet refused at its start said it was up")
+        refusing.takes = true
+        refusing.web.activated()
+        XCTAssertEqual(refusing.shown.last, "device up", "the sheet the activation showed did not say it was up")
     }
 
     /// The system presents no sheet while the app is not active, which is where a sign-in

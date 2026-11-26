@@ -140,7 +140,7 @@ final class LookToolTests: XCTestCase {
     func testSettingAPartLeavesTheFieldsItDoesNotNameStanding() async throws {
         let store = defaults()
         let tuning = Tuning(defaults: store)
-        tuning.set(.roamSpeed, to: 100)
+        tuning.set(.stride, to: 100)
         let scale = await tool(tuning).run(["set", "mascot.scale", "2"])
         XCTAssertEqual(scale.status, ToolReply.ok, scale.text)
         let part = await tool(tuning).run(["set", "mascot", #"{"clearance":20}"#])
@@ -148,7 +148,7 @@ final class LookToolTests: XCTestCase {
         for worn in [tuning.worn(over: vault), Tuning(defaults: store).worn(over: vault)] {
             XCTAssertEqual(worn.mascot.clearance, 20)
             XCTAssertEqual(worn.mascot.scale, 2)
-            XCTAssertEqual(worn.mascot.roamSpeed, 100)
+            XCTAssertEqual(worn.mascot.stride, 100)
         }
     }
 

@@ -1,5 +1,5 @@
 {
- "engine": "topo-mascot-engine/topo-engine.js at 240fda1",
+ "engine": "topo-mascot-engine/topo-engine.js at c0852f3",
  "width": 184,
  "height": 160,
  "scenarios": [
@@ -397,6 +397,72 @@
     "10": "24a87f19b4c10bd26f3afbf459434b60ae9f08886effec831975b8439a36f1d5",
     "40": "04a7f6fbfc8bdf94be728b944ac8b08c78b3e7d4e59757ed6f63a75b921955dc",
     "65": "bb59810f924209f53ab276203b422865ae2b40e81536b6bfd2daa5c2c170c273"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-18-swimOpen-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimOpen"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "1c70952a41a843eb9cf08b0447f1d6845fa1b6054f33c8b2aa8b9ba37a3fc14e",
+    "40": "fc268fe99a094bcd18e8727708170bb36fcc1ebd21f300d319301bd37c62d7e0",
+    "65": "e17a50329957efdec4ba1945d234ddc389640b3b2abd80f493fcdbc39303c785"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-19-swimThrust-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimThrust"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "243fa8bb83f0383163a955c174f27cd378907ed832b3156695837e42890cc73a",
+    "40": "d9a0d038e508d28374556b4e64d897d63f4c510611583403157a579750c33512",
+    "65": "1f41ea8df06c157a29ffc491d9a1ed8c759073fdd136b68aeb059c11a083b336"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-20-swimTrail-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimTrail"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "4d59c4e72c203082db7a1120cde6d4ee79643fd2140f5d2d9ff0ce342efe9deb",
+    "40": "9722e61b052ba177741f64b5a68f259e4d9c1aebd710efdb485aaaf1219b4f13",
+    "65": "774fd7a0140f37164166cf8fc950859600e7c4986abd68b08e4bcdc3c69827c6"
    }
   },
   {
@@ -1175,6 +1241,96 @@
   },
   {
    "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-18-swimOpen-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimOpen"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "c918b79fda287d9829be5b0cd8084ff8ccf89fad835c2715ba0227a4f9fcd97a",
+    "65": "f2a5f7302c7320fdba68930ce56c77a08afc93b7b897b9c26b547b116fa6421d"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-19-swimThrust-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimThrust"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "ab757b3e6db21b1839a5cdb5701e8c6b1803b6df00bfabf02369f10f14af11c5",
+    "65": "ae811b945ec0e7df91b6e2dbe4593ea08a6cadfe784f69b02038f968ab1ab073"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-20-swimTrail-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "swimTrail"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "e12102a66f301651874768f0a95c1cf5ab5ad4affd3923c3d16a9a152e7e2600",
+    "65": "98d991161a382b29d29238f387a858cc896c510eb6d2504c1a0b54e0542e8d99"
+   }
+  },
+  {
+   "fps": 30,
    "seed": 50,
    "name": "faces-rest",
    "seconds": 100,
@@ -1458,6 +1614,740 @@
     "200": "9121b403d0bca4a0e616b48dfceea4a797908f7701e6c31bd08dabaeca67fae5",
     "260": "65a160e36340adb9aaf181d431a210bffe276d29ae25156f70c785289b470ee5",
     "340": "cc140be134932fe7bb99d6976b9a864f72db91c0ee1bf94d105d8aaedce28b80"
+   }
+  },
+  {
+   "fps": 60,
+   "seed": 1,
+   "name": "swim-strokes",
+   "seconds": 9,
+   "script": [
+    [
+     0,
+     {
+      "activity": "swimOpen",
+      "trail": 90
+     }
+    ],
+    [
+     0.32,
+     {
+      "activity": "swimThrust",
+      "trail": 90
+     }
+    ],
+    [
+     0.52,
+     {
+      "activity": "swimTrail",
+      "trail": 90
+     }
+    ],
+    [
+     1.07,
+     {
+      "activity": "swimOpen",
+      "trail": -90
+     }
+    ],
+    [
+     1.3900000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -90
+     }
+    ],
+    [
+     1.59,
+     {
+      "activity": "swimTrail",
+      "trail": -90
+     }
+    ],
+    [
+     2.14,
+     {
+      "activity": "swimOpen",
+      "trail": 0
+     }
+    ],
+    [
+     2.46,
+     {
+      "activity": "swimThrust",
+      "trail": 0
+     }
+    ],
+    [
+     2.66,
+     {
+      "activity": "swimTrail",
+      "trail": 0
+     }
+    ],
+    [
+     3.21,
+     {
+      "activity": "swimOpen",
+      "trail": 180
+     }
+    ],
+    [
+     3.53,
+     {
+      "activity": "swimThrust",
+      "trail": 180
+     }
+    ],
+    [
+     3.73,
+     {
+      "activity": "swimTrail",
+      "trail": 180
+     }
+    ],
+    [
+     4.28,
+     {
+      "activity": "swimOpen",
+      "trail": 135
+     }
+    ],
+    [
+     4.6000000000000005,
+     {
+      "activity": "swimThrust",
+      "trail": 135
+     }
+    ],
+    [
+     4.800000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": 135
+     }
+    ],
+    [
+     5.3500000000000005,
+     {
+      "activity": "swimOpen",
+      "trail": -45
+     }
+    ],
+    [
+     5.670000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -45
+     }
+    ],
+    [
+     5.870000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": -45
+     }
+    ],
+    [
+     6.420000000000001,
+     {
+      "activity": "swimOpen",
+      "trail": 45
+     }
+    ],
+    [
+     6.740000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": 45
+     }
+    ],
+    [
+     6.940000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": 45
+     }
+    ],
+    [
+     7.490000000000001,
+     {
+      "activity": "swimOpen",
+      "trail": -150
+     }
+    ],
+    [
+     7.810000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -150
+     }
+    ],
+    [
+     8.010000000000002,
+     {
+      "activity": "swimTrail",
+      "trail": -150
+     }
+    ],
+    [
+     8.56,
+     {
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 540,
+   "digests": {
+    "10": "242575c21fd4d56ca67f880417c18b40b18f97fad0b18539bc7cf79c69c690f9",
+    "25": "efb846049375808971187e07457d76bc1a1613baeb7b76818af384d2938ed56f",
+    "40": "a9ef3d5f1947ca3396f8d56dbf865ca82ff1f5f5abb167c32ece3b76b24df83e",
+    "70": "d772988a3f86e961083ee540adaddc151d8085f581fd4065b52662ebc2bc7bee",
+    "95": "ea29a760fe8160ad11538e8e5727c3de2441409c1bf8af572e7f013b88b6c66a",
+    "120": "d758d06d66c243b61ee8e971baa7153d56ffac3d4d9f0c3f57e14ec7ba4c9b63",
+    "180": "578fbe5002e167269e75e20b6498353bc736ca785aa7c3f7599f1837396de2e8",
+    "250": "411828ff9e2b045de94dd1b83c1f590c89f6f962c37ae2ffe8a7d2fbe5df5bff",
+    "330": "96cc1ce0643778f7198499269516bdf682725345f12037aaf1fe5e531f65ef63",
+    "420": "993a4fa00f8a465780de7efeb003f4df703aa57534ad1dda9876d9dd400e9c27",
+    "480": "21d8793fbf9a0c418ae64822698a4d3c4667e189b354cc2e0c6bf86b68902052",
+    "520": "cf682a76a0088d16918706f5337624e14cbd28d35804fd68162435a7bd239515",
+    "539": "81858ac8dc4b9ef8a0359048fd0621fd26768614bdc5cdd2e32cecacb1536eda"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "swim-aims",
+   "seconds": 12,
+   "script": [
+    [
+     0,
+     {
+      "activity": "swimTrail",
+      "trail": 90
+     }
+    ],
+    [
+     1,
+     {
+      "activity": "swimTrail",
+      "trail": 60
+     }
+    ],
+    [
+     2,
+     {
+      "activity": "swimTrail",
+      "trail": 30
+     }
+    ],
+    [
+     3,
+     {
+      "activity": "swimTrail",
+      "trail": 0
+     }
+    ],
+    [
+     4,
+     {
+      "activity": "swimTrail",
+      "trail": -30
+     }
+    ],
+    [
+     5,
+     {
+      "activity": "swimTrail",
+      "trail": -64
+     }
+    ],
+    [
+     6,
+     {
+      "activity": "swimTrail",
+      "trail": -90
+     }
+    ],
+    [
+     7,
+     {
+      "activity": "swimTrail",
+      "trail": -120
+     }
+    ],
+    [
+     8,
+     {
+      "activity": "swimTrail",
+      "trail": -150
+     }
+    ],
+    [
+     9,
+     {
+      "activity": "swimTrail",
+      "trail": 180
+     }
+    ],
+    [
+     10,
+     {
+      "activity": "swimTrail",
+      "trail": 150
+     }
+    ],
+    [
+     11,
+     {
+      "activity": "swimTrail",
+      "trail": 120
+     }
+    ]
+   ],
+   "frames": 360,
+   "digests": {
+    "25": "c6ffdb0519fe7bb8038f2c0fd451d6229e568dbd755ed03b028873e5a4d5ebdf",
+    "85": "4d54981264daeba8c835c79c60270e24e21707284f95b9d1880b04c4378079d8",
+    "145": "d3ec1cbf5e8c12f8d1e048b5bc9a5b5a6301ea126b9dbc0522d2ab5938f681a7",
+    "175": "80690d55368bcaa99f3ac0c00bca7308022102d73e744c10c7daa7c9c84a0291",
+    "205": "0a9c3df4fbef255647be2819db42b2f0c7ce4ba883d0d8f1f589e121114bf1f4",
+    "265": "40619f16ea026da25e1be35ebf44040eb4a1178276e42c5434ffd2099c035ef1",
+    "295": "2e2dcbe2d11b089af764f1da5fdb92a6a1d6b3c40aedc46b580c4029dd54f85b",
+    "325": "253bf7f778df81ff97952244b31a4ea2bbc78f9857219c753bce2329cec37758",
+    "355": "79a00ec89b05c49cd650a9e3c6e42ae0b9df1b8f1ff89b258dfd4453046ad336"
+   }
+  },
+  {
+   "fps": 60,
+   "seed": 1,
+   "name": "swim-cut",
+   "seconds": 6,
+   "script": [
+    [
+     0,
+     {
+      "activity": "swimOpen"
+     }
+    ],
+    [
+     0.15,
+     {
+      "activity": "swimThrust",
+      "trail": 20
+     }
+    ],
+    [
+     0.25,
+     {
+      "activity": "thinking"
+     }
+    ],
+    [
+     1,
+     {
+      "activity": "swimTrail",
+      "trail": -70
+     }
+    ],
+    [
+     1.4,
+     {
+      "activity": "sign",
+      "sign": "hi"
+     }
+    ],
+    [
+     3,
+     {
+      "activity": "swimOpen"
+     }
+    ],
+    [
+     3.1,
+     {
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 360,
+   "digests": {
+    "8": "1394506e5143215603681d7894e58015a2920e64ed8282f5c8afe802754c3707",
+    "20": "74306924cd93b4e7c929e83b41762aeb90c45342fb32d983b34f8f1179fb6893",
+    "50": "561a8d2d29920e3333479e2904df32d46b4778235dc08ca8bc3e555ff35a2b02",
+    "90": "2472e4e648df8bcfe9c031acd7dd0d01aade5c8f5626adcdaa1b61ec58099ef5",
+    "130": "8a95a74b59ec3fd59531ff36b972664c62113722a555514955398a252fd02698",
+    "200": "375f9f3b11cf6ba09f2486e12f68d6c0c39c90c8deeaa2a89cae229d1aa7bb92",
+    "300": "169b56748dc14c14f2f6cbbc7298a1918df212294f2c9d6d468e5450f0bce619"
+   }
+  },
+  {
+   "fps": 60,
+   "seed": 1,
+   "name": "faces-swim-strokes",
+   "seconds": 9,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "activity": "swimOpen",
+      "trail": 90
+     }
+    ],
+    [
+     0.33,
+     {
+      "activity": "swimThrust",
+      "trail": 90
+     }
+    ],
+    [
+     0.53,
+     {
+      "activity": "swimTrail",
+      "trail": 90
+     }
+    ],
+    [
+     1.08,
+     {
+      "activity": "swimOpen",
+      "trail": -90
+     }
+    ],
+    [
+     1.4000000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -90
+     }
+    ],
+    [
+     1.6,
+     {
+      "activity": "swimTrail",
+      "trail": -90
+     }
+    ],
+    [
+     2.15,
+     {
+      "activity": "swimOpen",
+      "trail": 0
+     }
+    ],
+    [
+     2.4699999999999998,
+     {
+      "activity": "swimThrust",
+      "trail": 0
+     }
+    ],
+    [
+     2.67,
+     {
+      "activity": "swimTrail",
+      "trail": 0
+     }
+    ],
+    [
+     3.2199999999999998,
+     {
+      "activity": "swimOpen",
+      "trail": 180
+     }
+    ],
+    [
+     3.5399999999999996,
+     {
+      "activity": "swimThrust",
+      "trail": 180
+     }
+    ],
+    [
+     3.7399999999999998,
+     {
+      "activity": "swimTrail",
+      "trail": 180
+     }
+    ],
+    [
+     4.29,
+     {
+      "activity": "swimOpen",
+      "trail": 135
+     }
+    ],
+    [
+     4.61,
+     {
+      "activity": "swimThrust",
+      "trail": 135
+     }
+    ],
+    [
+     4.8100000000000005,
+     {
+      "activity": "swimTrail",
+      "trail": 135
+     }
+    ],
+    [
+     5.36,
+     {
+      "activity": "swimOpen",
+      "trail": -45
+     }
+    ],
+    [
+     5.680000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -45
+     }
+    ],
+    [
+     5.880000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": -45
+     }
+    ],
+    [
+     6.430000000000001,
+     {
+      "activity": "swimOpen",
+      "trail": 45
+     }
+    ],
+    [
+     6.750000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": 45
+     }
+    ],
+    [
+     6.950000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": 45
+     }
+    ],
+    [
+     7.500000000000001,
+     {
+      "activity": "swimOpen",
+      "trail": -150
+     }
+    ],
+    [
+     7.820000000000001,
+     {
+      "activity": "swimThrust",
+      "trail": -150
+     }
+    ],
+    [
+     8.020000000000001,
+     {
+      "activity": "swimTrail",
+      "trail": -150
+     }
+    ],
+    [
+     8.57,
+     {
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 540,
+   "digests": {
+    "25": "bef915e1d056e43b04bf7a0bfa450b827f9e28ea99a1b38a454fac6aa0097812",
+    "70": "3364f34756d5824790257e186a8f712e85a0846d2456ff3344e666c1cc546443",
+    "120": "3680497ba87cb5d95b952020d2ac39f2af3de34ffde6239b0d040e279acf884c",
+    "250": "644c857a517776244036726d7f8f7e54fbd73b24201c8ebe40c27ffe6d2453a9",
+    "420": "e271ad30547411691b86a07b209b10fa865c88269073cbd54f806e3dc3f2f945"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-swim-aims",
+   "seconds": 12,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "activity": "swimTrail",
+      "trail": 90
+     }
+    ],
+    [
+     1.01,
+     {
+      "activity": "swimTrail",
+      "trail": 60
+     }
+    ],
+    [
+     2.01,
+     {
+      "activity": "swimTrail",
+      "trail": 30
+     }
+    ],
+    [
+     3.01,
+     {
+      "activity": "swimTrail",
+      "trail": 0
+     }
+    ],
+    [
+     4.01,
+     {
+      "activity": "swimTrail",
+      "trail": -30
+     }
+    ],
+    [
+     5.01,
+     {
+      "activity": "swimTrail",
+      "trail": -64
+     }
+    ],
+    [
+     6.01,
+     {
+      "activity": "swimTrail",
+      "trail": -90
+     }
+    ],
+    [
+     7.01,
+     {
+      "activity": "swimTrail",
+      "trail": -120
+     }
+    ],
+    [
+     8.01,
+     {
+      "activity": "swimTrail",
+      "trail": -150
+     }
+    ],
+    [
+     9.01,
+     {
+      "activity": "swimTrail",
+      "trail": 180
+     }
+    ],
+    [
+     10.01,
+     {
+      "activity": "swimTrail",
+      "trail": 150
+     }
+    ],
+    [
+     11.01,
+     {
+      "activity": "swimTrail",
+      "trail": 120
+     }
+    ]
+   ],
+   "frames": 360,
+   "digests": {
+    "85": "595b1060ecd5c677851b28163080426975bb1b56a111e05ca00d2ba3876702a3",
+    "175": "4702efbd0dc2911c1074b2cebadfdcf4449086cc80fb19acfc68d9d11ab3cc11",
+    "265": "09ff60f1e5b6cedc0caa5d6e1a8c3548e9e9d535ab8abf99e6bbda56ac79e5d5",
+    "325": "be6ff5dd45f4bfdcdd86cd747d34064b56bd5537e651fb00d92428045711b458"
+   }
+  },
+  {
+   "fps": 60,
+   "seed": 1,
+   "name": "faces-swim-cut",
+   "seconds": 6,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "activity": "swimOpen"
+     }
+    ],
+    [
+     0.16,
+     {
+      "activity": "swimThrust",
+      "trail": 20
+     }
+    ],
+    [
+     0.26,
+     {
+      "activity": "thinking"
+     }
+    ],
+    [
+     1.01,
+     {
+      "activity": "swimTrail",
+      "trail": -70
+     }
+    ],
+    [
+     1.41,
+     {
+      "activity": "sign",
+      "sign": "hi"
+     }
+    ],
+    [
+     3.01,
+     {
+      "activity": "swimOpen"
+     }
+    ],
+    [
+     3.11,
+     {
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 360,
+   "digests": {
+    "20": "383583407de7690f15a9aaf3112301b9f91cd0b3820b81a34305cea15846c75f",
+    "90": "c93d92d25f1c7997b2bb90e770344ac5f403f14966768d5d69223b4953d06edc",
+    "200": "c245a55e27b15bdb58427d2bc11c5d872f38f38b003ddd731bb81d32b994e280"
    }
   }
  ]

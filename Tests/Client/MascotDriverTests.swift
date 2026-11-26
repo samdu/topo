@@ -176,7 +176,7 @@ final class MascotDriverTests: XCTestCase {
                                   pane: CGRect(x: 40, y: 600, width: 320, height: 80),
                                   well: CGRect(x: 164, y: 604, width: 72, height: 72))
     static let settings = MascotRoam.Settings(size: MascotSprite.size(scale: 2.0 / 3), clearance: 8,
-                                              reach: MascotSprite.reach(scale: 2.0 / 3), speed: 40,
+                                              reach: MascotSprite.reach(scale: 2.0 / 3),
                                               settle: 0.6)
 
     /// The canvas's display link runs while he animates, at the look's rate, and is gone the
@@ -269,7 +269,7 @@ final class MascotDriverTests: XCTestCase {
     }
 
     /// At a frame interval of a second the link calls back once a second, and the roam's clock is
-    /// real time: the settle is 0.6 s of it and the glide goes at the look's speed, not at the
+    /// real time: the settle is 0.6 s of it and the swim goes at its own pace, not at the
     /// tenth of it a per-callback cap under the interval would make it. A stall longer than a frame
     /// moves the clock two frames on.
     func testTheClockIsRealTimeAtAFrameIntervalOfASecond() throws {
@@ -278,11 +278,12 @@ final class MascotDriverTests: XCTestCase {
         defer { window.isHidden = true }
         window.addSubview(canvas)
         let input = MascotState(model: "claude-sonnet-5").input
-        // No hurry, so a glide under a turn is at the stroll too.
+        // No hurry, so a swim under a turn is at the cruise too.
         var settings = Self.settings
         settings.hurry = 1
         func apply(_ field: MascotField) {
-            canvas.apply(input: input, field: field, settings: settings, interval: 1, conditions: seen)
+            canvas.apply(input: input, field: field, settings: settings, interval: 1, swimInterval: 1, workInterval: 1,
+                         conditions: seen)
         }
         // Room at the bottom right only: he settles there.
         var low = Self.open
@@ -294,7 +295,7 @@ final class MascotDriverTests: XCTestCase {
         canvas.fire(at: stamp)
         XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
         XCTAssertEqual(canvas.roam?.roost.name, "gap", "a 0.6 s settle was not over a second in")
-        // Room opens straight above him and a turn lands where he stands: he strolls up to it.
+        // Room opens straight above him and a turn lands where he stands: he swims up to it.
         var roomy = Self.open
         roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600), CGRect(x: 200, y: 500, width: 200, height: 100)]
         apply(roomy)
@@ -304,7 +305,7 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertEqual(canvas.clock, 1 + 1.0002 + 0.9997, accuracy: 1e-6, "the clock is not real time")
         let glide = try XCTUnwrap(canvas.roam?.move, "no glide once the settle was over")
-        // Each second of callbacks is a second of the stroll: the glide's pace is the look's,
+        // Each second of callbacks is a second of the swim: its pace is the swim's own,
         // whatever the frame interval.
         var steps = 0
         while let move = canvas.roam?.move, steps < 30 {
@@ -315,7 +316,7 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertNil(canvas.roam?.move, "the glide did not end")
         XCTAssertEqual(Double(steps), glide.duration - glide.elapsed, accuracy: 1.001,
-                       "a glide of \(glide.duration) s at the look's speed took \(steps) callbacks of a second")
+                       "a swim of \(glide.duration) s took \(steps) callbacks of a second")
         // A stall of a minute moves the clock by the cap, two frames.
         let clock = canvas.clock
         stamp += 60
@@ -351,9 +352,10 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(canvas.roam?.roost.name, "gap")
     }
 
-    /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
-    /// for, so a thinking guest goes on thinking rather than being put back to idle.
-    func testTheWalkIsWornOnlyWhileHeGlidesAndHisActivitySurvivesIt() throws {
+    /// The stroke's poses are worn only while he swims, and the glide while he rights himself after
+    /// it; upright again he wears the activity he stands for, so a thinking guest goes on thinking
+    /// rather than being put back to idle.
+    func testTheStrokeIsWornOnlyWhileHeSwimsAndHisActivitySurvivesIt() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
@@ -363,25 +365,51 @@ final class MascotDriverTests: XCTestCase {
             canvas.apply(input: thinking, field: field, settings: Self.settings, interval: 1.0 / 30,
                          conditions: seen)
         }
-        apply(Self.open)
-        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        // He stands high, above a turn that fills the foot of the screen.
+        var high = Self.open
+        high.obstacles = [CGRect(x: 0, y: 250, width: 400, height: 350)]
+        apply(high)
+        for _ in 0..<(30 * 30) where canvas.roam?.needsTime == true { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.driver.input.activity, "thinking")
-        let before = try XCTUnwrap(canvas.roam?.position)
-        // A turn lands where he stands: he goes, walking.
+        let before = try XCTUnwrap(canvas.roam?.picture)
+        // A turn lands over him and everything above him, and the foot is clear: he swims straight
+        // down the screen, his lean held at its limit, so he arrives with his arms off straight
+        // behind him and comes in as he rights himself.
         var landed = Self.open
-        landed.obstacles = [CGRect(x: 0, y: before.y - 20, width: 400, height: 600 - before.y + 20)]
+        landed.obstacles = [CGRect(x: 0, y: 0, width: 400, height: before.maxY + 20)]
         apply(landed)
-        var walked = false
+        var swam = false
+        var worn: Set<String> = []
         for _ in 0..<(30 * 30) {
             canvas.step(1.0 / 30)
-            if canvas.roam?.walking == true {
-                walked = true
-                XCTAssertEqual(canvas.driver.input.activity, "walk")
+            if canvas.roam?.swimming == true {
+                swam = true
+                worn.insert(canvas.driver.input.activity ?? "")
             }
-            if walked, canvas.roam?.walking == false { break }
+            if swam, canvas.roam?.swimming == false { break }
         }
-        XCTAssertTrue(walked, "he never glided")
-        XCTAssertEqual(canvas.driver.input.activity, "thinking", "the glide put him back to something else")
+        XCTAssertTrue(swam, "he never swam")
+        XCTAssertEqual(worn, ["swimOpen", "swimThrust", "swimTrail"], "not the stroke's poses while he swam")
+        var righting = 0
+        func behind() -> Double? {
+            canvas.driver.input.trail.map { abs(atan2(sin(($0 - MascotLean.behind) * .pi / 180), cos(($0 - MascotLean.behind) * .pi / 180))) * 180 / .pi }
+        }
+        var off = behind()
+        XCTAssertGreaterThan(off ?? 0, 20, "he arrived with his arms straight behind him, so their coming in is not seen")
+        while canvas.lean.angle != 0, righting < 120 {
+            XCTAssertEqual(canvas.driver.input.activity, "swimTrail", "a pose other than the glide drawn turned")
+            canvas.step(1.0 / 30)
+            righting += 1
+            // His arms, as handed to the engine, come in toward straight behind him and never away.
+            if canvas.lean.angle != 0, let now = behind(), let was = off {
+                XCTAssertLessThanOrEqual(now, was + 1e-6, "his arms swung away from behind him while he righted himself")
+                off = now
+            }
+        }
+        XCTAssertGreaterThan(righting, 0, "he arrived upright, so nothing of his righting was seen")
+        XCTAssertEqual(canvas.lean.angle, 0, "never upright")
+        if let off { XCTAssertLessThan(off, 5, "upright with his arms \(off)° from straight behind him") }
+        XCTAssertEqual(canvas.driver.input.activity, "thinking", "the swim put him back to something else")
         XCTAssertEqual(canvas.driver.input.corner, 0, "the engine's own stroll is not his to take")
     }
 

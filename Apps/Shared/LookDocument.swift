@@ -310,9 +310,14 @@ enum LookDocument {
         // points tall, a style shrunk to that at a larger text size.
         r.font("signFont", &value.signFont, largest: Look.Settings.signFontLargest)
         r.colour("signInk", &value.signInk)
-        r.colour("copiedInk", &value.copiedInk)
         r.bounded("copiedBump", &value.copiedBump, in: 1...1.3)
         r.bounded("copiedPause", &value.copiedPause, in: Look.Settings.copiedPauseRange)
+        // Over GitHub's page Topo and his sign cover what is under them, so they are no wider
+        // than the narrowest phone (184 × 1.7 < 320 points). The board stands under the browser's bar, which on an iPhone ends some 80
+        // points under the safe area's top with the browser over Settings and Connections, so the
+        // bar's close button is never under it.
+        r.bounded("signOverPageScale", &value.signOverPageScale, in: 0.5...1.7)
+        r.bounded("signOverPageTop", &value.signOverPageTop, in: Look.Settings.signOverPageTopRange)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
@@ -367,10 +372,11 @@ enum LookDocument {
     private static func mascot(_ value: inout Look.Mascot, _ r: Reader) {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
-        r.roamSpeed("roamSpeed", &value.roamSpeed)
-        r.roamSpeed("swimSpeed", &value.swimSpeed)
+        r.stride("stride", &value.stride)
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
+        r.frameInterval("swimInterval", &value.swimInterval)
+        r.frameInterval("workInterval", &value.workInterval)
         r.frameInterval("frameInterval", &value.frameInterval)
         r.frameInterval("restInterval", &value.restInterval)
         r.seconds("restAfter", &value.restAfter)
@@ -603,19 +609,19 @@ enum LookDocument {
             }
         }
 
-        /// How fast Topo strolls, in points a second: at least 10, so a move across the screen
-        /// ends in under a minute rather than never, and at most 400, past which it is a jump.
-        func roamSpeed(_ key: String, _ value: inout CGFloat) {
-            if let number = amount(key, in: 10...400, "a speed in points a second between 10 and 400") {
+        /// How far one stroke of Topo's swim carries him: at least 30 points, so a swim across the
+        /// screen is not a crawl of twenty strokes, and at most 200, past which one snap is a jump.
+        func stride(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 30...200, "a length in points between 30 and 200") {
                 took(key)
                 value = CGFloat(number)
             }
         }
 
-        /// How many times his stroll Topo goes while something is over him: 1, no hurry at all, to
-        /// 20, past which a move out from under a turn is a jump.
+        /// How many times the cruise Topo's strokes come in a hurry: 1, no hurry at all, to 3,
+        /// past which a stroke is over before its poses are reached.
         func hurry(_ key: String, _ value: inout CGFloat) {
-            if let number = amount(key, in: 1...20, "a multiple of the roam speed between 1 and 20") {
+            if let number = amount(key, in: 1...3, "a multiple of the cruise between 1 and 3") {
                 took(key)
                 value = CGFloat(number)
             }

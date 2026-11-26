@@ -49,7 +49,7 @@ struct LookTool: Tool {
             Field(path: "mascot.placement", range: Look.Mascot.Placement.allCases.map(\.rawValue).joined(separator: ", ")) { $0.mascot.placement.rawValue },
             Field(path: "mascot.scale", range: "0.25–4 pt a pixel") { String(format: "%g pt a pixel", Double($0.mascot.scale)) },
             Field(path: "mascot.clearance", range: "0–64 pt") { points($0.mascot.clearance) },
-            Field(path: "mascot.roamSpeed", range: "10–400 pt a second") { String(format: "%g pt a second", Double($0.mascot.roamSpeed)) },
+            Field(path: "mascot.stride", range: "30–200 pt a stroke") { String(format: "%g pt a stroke", Double($0.mascot.stride)) },
             Field(path: "mind.sonnet", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.sonnet },
             Field(path: "mind.opus", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.opus },
             Field(path: "mind.fable", range: "a name, 1–\(Look.Mind.longest) characters") { $0.mind.fable },
