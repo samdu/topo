@@ -816,9 +816,13 @@ final class ConnectionsScreenshots: XCTestCase {
             return (image, box)
         }
         /// He is in his place: the window is the scene's, and the top of what is drawn, his
-        /// sign's board, stands `signOverPageTop` under the safe area's top, centred. A drawing
+        /// sign's board, stands `signOverPageTop` under the safe area's top, centred in the safe
+        /// area's width. What is drawn is not symmetric (the sign is held out to one side), so
+        /// the first place is judged near the middle and every later one by the same offset
+        /// from it, `lean`. A drawing
         /// of the window takes the main thread a while on a simulator, and his frames, which take
         /// the sign up, come on it too, so it is looked at twice a second.
+        var lean: CGFloat?
         func placed(_ why: String) async throws -> (window: AboveSheetsWindow, box: CGRect, image: UIImage) {
             var last = CGRect.null
             do {
@@ -826,7 +830,8 @@ final class ConnectionsScreenshots: XCTestCase {
                     guard let window = above(), window.frame == scene.coordinateSpace.bounds else { return false }
                     last = try drawing(window).box
                     let top = window.safeAreaInsets.top + Look().settings.signOverPageTop
-                    return abs(last.minY - top) <= 2 && abs(last.midX - window.bounds.midX) <= 12
+                    let off = last.midX - window.safeAreaLayoutGuide.layoutFrame.midX
+                    return abs(last.minY - top) <= 2 && (lean.map { abs(off - $0) <= 2 } ?? (abs(off) <= 24))
                 }
             } catch let missed as Missed {
                 if let window = above() {
@@ -843,6 +848,7 @@ final class ConnectionsScreenshots: XCTestCase {
             }
             let window = try XCTUnwrap(above())
             let drawn = try drawing(window)
+            if lean == nil { lean = drawn.box.midX - window.safeAreaLayoutGuide.layoutFrame.midX }
             return (window, drawn.box, drawn.image)
         }
 
