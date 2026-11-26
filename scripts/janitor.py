@@ -1120,33 +1120,61 @@ def decide_sweep(worktrees, checkout, history, now):
     return out
 
 
+SHELLS = ("sh", "bash", "zsh", "dash")
+SIM_STOP_HOLD = timedelta(minutes=30)   # a stopped sign-in's code screen is kept up this long
+
+
+def runs_script(argv):
+    """Whether argv is simulator-run.sh running: the script as the program, or
+    as the first operand of a shell or env after its options (and env's
+    assignments and shell). A process that only mentions it, a shell's `-c`
+    command string included, is not."""
+    prog = os.path.basename(argv[0])
+    if prog == "simulator-run.sh":
+        return True
+    if prog not in SHELLS and prog != "env":
+        return False
+    rest = iter(argv[1:])
+    for a in rest:
+        if a in ("-o", "+o", "-O", "+O"):
+            next(rest, None)
+        elif prog in SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+            return False   # a command string, not a script
+        elif a.startswith(("-", "+")) or (prog == "env" and "=" in a) or (prog == "env" and os.path.basename(a) in SHELLS):
+            continue
+        else:
+            return os.path.basename(a) == "simulator-run.sh"
+    return False
+
+
 def sim_users(udid, procs):
     """The processes in `procs`, [(pid, argv)], using the simulator `udid`, as
     scripts/simulator-run.sh's `others_using` reads them: a simulator-run.sh
     (on any device, since DEVICE is not in its arguments), or an xcodebuild or
-    simctl naming the udid. A process that only mentions the script is none."""
+    simctl one of whose arguments, or a comma-separated field of one (a
+    destination's `id=<udid>`), names it."""
     out = []
     for pid, argv in procs:
         if not argv:
             continue
-        prog = os.path.basename(argv[0])
-        arg = os.path.basename(argv[1]) if len(argv) > 1 else ""
-        using = "simulator-run.sh" in (prog, arg)
-        if not using and prog in ("xcodebuild", "xcrun", "simctl"):
-            using = any(a == udid or a.endswith("id=" + udid) for a in argv[1:])
+        using = runs_script(argv)
+        if not using and os.path.basename(argv[0]) in ("xcodebuild", "xcrun", "simctl"):
+            using = any(p in (udid, "id=" + udid) for a in argv[1:] for p in a.split(","))
         if using:
             out.append(f"{pid} {' '.join(argv)[:120]}")
     return out
 
 
-def decide_simulators(devices, targets, last_use, seen, users, now):
+def decide_simulators(devices, targets, last_use, seen, users, now, stops=None):
     """The simulators to shut down, and the new record of when each target was
     first seen booted. A target is the signed-in device or one simulator-run.sh
     has used (`targets`), never the agent's or a suite's own. One booted with
     nothing using it (`users(udid)`) is shut once it has stood SIM_IDLE since
     the later of its last use and the pass that first saw it booted or in use,
     so a boot that no run stamped is given SIM_IDLE from this janitor's first
-    sight of it."""
+    sight of it. One whose sign-in stopped inside SIM_STOP_HOLD (`stops`) is
+    kept, its code screen may be up."""
+    stops = stops or {}
     shut, kept = [], {}
     for d in devices:
         udid, name = d.get("udid"), d.get("name") or ""
@@ -1157,6 +1185,8 @@ def decide_simulators(devices, targets, last_use, seen, users, now):
             continue
         first = parse_time(seen.get(udid)) or now
         kept[udid] = first.isoformat()
+        if stops.get(udid) and now - stops[udid] < SIM_STOP_HOLD:
+            continue
         since = max(t for t in (first, last_use.get(udid)) if t)
         if now - since >= SIM_IDLE:
             shut.append({"udid": udid, "name": name, "idle": now - since})
@@ -2061,18 +2091,32 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
         say("sweep:read", f"could not read the worktrees: {ex}")
 
     # 11: simulator-run.sh's devices left booted with nothing using them. The
-    # shutdown is made under simulator-run.sh's own lock, with the processes
-    # read again under it, so a run booting the device is never shut under.
+    # decision is made again under simulator-run.sh's own lock from fresh
+    # reads of the processes, the last uses and the stops, so a run that used
+    # the device, stopped a sign-in on it or is booting it is never shut under.
     try:
         simstate = os.path.expanduser(os.environ.get("TOPO_SIM_STATE", SIM_STATE))
-        stamps = {}
-        if os.path.isdir(simstate):
-            for f in os.listdir(simstate):
-                if f.endswith(".last-use"):
-                    stamps[f[:-len(".last-use")]] = datetime.fromtimestamp(os.path.getmtime(os.path.join(simstate, f)), timezone.utc)
-        procs = sh.processes()
-        shut, state["simulators"] = decide_simulators(sh.simulators(), {SIGNED_IN_SIMULATOR, *stamps}, stamps,
-                                                      state.get("simulators", {}), lambda u: sim_users(u, procs), now)
+
+        def stamped(suffix):
+            out = {}
+            if os.path.isdir(simstate):
+                for f in os.listdir(simstate):
+                    if f.endswith(suffix):
+                        try:
+                            out[f[:-len(suffix)]] = datetime.fromtimestamp(os.path.getmtime(os.path.join(simstate, f)), timezone.utc)
+                        except OSError:
+                            pass   # removed since the listing
+            return out
+
+        def decide(devices):
+            # The processes first: a run that ends between the two reads has stamped its use by then.
+            procs = sh.processes()
+            uses = stamped(".last-use")
+            return decide_simulators(devices, {SIGNED_IN_SIMULATOR, *uses}, uses, state.get("simulators", {}),
+                                     lambda u: sim_users(u, procs), now, stamped(".sign-in-stopped"))
+
+        devices = sh.simulators()
+        shut, state["simulators"] = decide(devices)
         state["fired"].pop("simulators:read", None)
         for d in shut:
             name = f"{d['name']} ({d['udid']})"
@@ -2086,13 +2130,14 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     except OSError:
                         quiet.append(f"simulator {name}: a run holds its lock; left")
                         continue
-                users = sim_users(d["udid"], sh.processes())
-                if users:
-                    quiet.append(f"simulator {name}: in use by {users[0]}; left")
+                again, seen = decide([x for x in devices if x.get("udid") == d["udid"]])
+                state["simulators"].update(seen)
+                if not again:
+                    quiet.append(f"simulator {name}: used, in use or held for a code screen since the pass read it; left")
                     continue
                 sh.shutdown_simulator(d["udid"])
                 state["simulators"].pop(d["udid"], None)
-                lines.append(f"shut down simulator {name}: booted with nothing using it for {minutes(d['idle'])}.")
+                lines.append(f"shut down simulator {name}: booted with nothing using it for {minutes(again[0]['idle'])}.")
                 persist()
             except (RuntimeError, OSError) as ex:
                 say(f"simulator:{d['udid']}", f"simulator {name} would not shut down: {ex}")

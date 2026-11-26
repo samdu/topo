@@ -231,24 +231,46 @@ stop_fresh() {
   [ -e "$stopped" ] && [ $(( $(date +%s) - $(stat -f %m "$stopped" 2>/dev/null || echo 0) )) -lt 1800 ]
 }
 
-# The processes, other than this run and its children, using the device; one line each.
+# The processes, other than this run and its children, using the device; one line each. A run
+# is the script as the program, or as the first operand of a shell or env after its options; an
+# xcodebuild or simctl uses the device when one of its arguments, or a comma-separated field of
+# one (a destination's `id=<udid>`), names it. A process list that cannot be read fails, so a
+# caller leaves the device as it is rather than taking the silence for nobody.
 others_using() {
-  ps -axwwo pid=,ppid=,command= 2>/dev/null | awk -v me="$$" -v u="$udid" '
+  local listed
+  listed="$(ps -axwwo pid=,ppid=,command=)" && [ -n "$listed" ] || return 1
+  printf '%s\n' "$listed" | awk -v me="$$" -v u="$udid" '
+    function base(x,   n, a) { n = split(x, a, "/"); return a[n] }
     { pid[NR] = $1; ppid[NR] = $2; line[NR] = $0 }
     END {
       mine[me] = 1
       do { grew = 0; for (i = 1; i <= NR; i++) if (!(pid[i] in mine) && (ppid[i] in mine)) { mine[pid[i]] = 1; grew = 1 } } while (grew)
       for (i = 1; i <= NR; i++) {
         if (pid[i] in mine) continue
-        split(line[i], f, " ")
-        n0 = split(f[3], a0, "/"); n1 = split(f[4], a1, "/")
-        prog = a0[n0]; arg = a1[n1]
-        using = (prog == "simulator-run.sh" || arg == "simulator-run.sh")
+        nf = split(line[i], f, " ")
+        prog = base(f[3]); using = (prog == "simulator-run.sh")
+        if (!using && (prog ~ /^(ba|z|da)?sh$/ || prog == "env")) {
+          for (j = 4; j <= nf; j++) {
+            if (f[j] == "-o" || f[j] == "+o" || f[j] == "-O" || f[j] == "+O") { j++; continue }
+            if (prog != "env" && f[j] ~ /^-[A-Za-z]*c[A-Za-z]*$/) break
+            if (f[j] ~ /^[-+]/ || (prog == "env" && f[j] ~ /=/)) continue
+            if (prog == "env" && base(f[j]) ~ /^(ba|z|da)?sh$/) continue
+            using = (base(f[j]) == "simulator-run.sh"); break
+          }
+        }
         if (!using && (prog == "xcodebuild" || prog == "xcrun" || prog == "simctl"))
-          for (j = 4; j in f; j++) if (f[j] == u || f[j] ~ ("id=" u "$")) { using = 1; break }
+          for (j = 4; j <= nf && !using; j++) {
+            n = split(f[j], part, ",")
+            for (k = 1; k <= n; k++) if (part[k] == u || part[k] == "id=" u) { using = 1; break }
+          }
         if (using) print substr(line[i], 1, 160)
       }
-    }' || true
+    }'
+}
+
+# What is using the device, or why that cannot be told; empty when nothing is.
+users_now() {
+  others_using || echo "the process list could not be read"
 }
 
 # Boots the device, under the lock, and waits for it.
@@ -275,8 +297,10 @@ release_device() {
   { if ! lockf -s -t 60 7; then
       echo "==> $udid is left booted: another run has held $simstate/mutex for a minute"
     else
-      users="$(others_using)"
-      if [ -n "$users" ]; then
+      users="$(users_now)"
+      if stop_fresh; then
+        echo "==> $udid is left booted: a sign-in on it stopped within the half hour, and its code screen may stand"
+      elif [ -n "$users" ]; then
         echo "==> $udid is left booted for the runs using it:"
         printf '%s\n' "$users" | sed 's/^/      /'
       elif timeout 120 xcrun simctl shutdown "$udid" 7>&- >/dev/null 2>&1; then
@@ -653,6 +677,9 @@ sign_in() {
     port="$served_port"
   fi
   results="$derived/TopoSimulatorSignIn.xcresult"
+  # Recorded before Settings is driven, so a run that ends mid-sign-in, by a signal included,
+  # leaves a stop behind: an attempt nobody saw finish is one that may have been refused.
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: begun and not seen to finish; see $results" >"$stopped"
   rm -rf "$results"
   boot_device
   echo "==> signing $udid into $account through Settings (TopoSimulatorSignInTests)"
@@ -710,20 +737,50 @@ sign_in() {
 # count of password sign-ins is in $simstate/renewals.log.
 renew_sign_in() {
   local why="$1" status=0
-  if [ -e "$stopped" ]; then
-    echo "==> $udid's iCloud sign-in has lapsed ($why), and an earlier sign-in on it stopped ($(cat "$stopped")), so this run types no password. Read why it stopped, then: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew (or SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in after a two-factor stop)" >&2
-    exit 1
+  take_sign_in || exit 1
+  refuse_if_stopped "$why"
+  if [ "$signed_meanwhile" = yes ]; then
+    echo "==> $udid's iCloud sign-in had lapsed ($why), and the run this one waited for renewed it"
+    drop_sign_in
+    return 0
   fi
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $udid $why ($root)" >>"$simstate/renewals.log"
   echo "==> $udid's iCloud sign-in has lapsed ($why); renewing it: --sign-in --renew, one password sign-in"
   renew=yes
   sign_in || status=$?
   renew=no
+  drop_sign_in
   if [ "$status" != 0 ]; then
     echo "==> the renewal stopped, and no run renews this device again until a --sign-in passes. A two-factor stop leaves its code screen up: SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in types the code and goes on" >&2
     exit "$status"
   fi
 }
+
+# Fails the run, touching nothing, while a sign-in on the device stands stopped.
+refuse_if_stopped() {
+  [ -e "$stopped" ] || return 0
+  echo "==> $udid's iCloud sign-in has lapsed ($1), and an earlier sign-in on it stopped ($(cat "$stopped")), so this run types no password. Read why it stopped, then: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew (or SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in after a two-factor stop)" >&2
+  exit 1
+}
+
+# One sign-in on a device at a time: a run holds `<udid>.renewing` while it drives Settings, and
+# another that wants to waits for it (20 minutes at most), then finds the sign-in that run left
+# (signed_meanwhile) or the stop it recorded. The lock is on descriptor 6, closed once the
+# sign-in is over, so nothing the run starts after holds it.
+take_sign_in() {
+  local since
+  signed_meanwhile=no
+  exec 6>"$simstate/$udid.renewing"
+  lockf -s -t 0 6 && return 0
+  echo "==> another run is signing $udid in; waiting for it, 20 minutes at most"
+  since="$(date +%s)"
+  if ! lockf -s -t 1200 6; then
+    echo "==> another run has been signing $udid in for 20 minutes; this run types nothing" >&2
+    return 1
+  fi
+  [ ! -e "$signedin" ] || [ "$(stat -f %m "$signedin")" -lt "$since" ] || signed_meanwhile=yes
+}
+drop_sign_in() { exec 6>&-; }
 
 # Renews the sign-in after this run booted the device, which ended it, when a sign-in has passed
 # on it before: a device with none recorded is not signed in for the first time unasked.
@@ -737,7 +794,9 @@ renew_after_boot() {
 
 if [ "$signin" = yes ]; then
   status=0
+  take_sign_in || exit 1
   sign_in || status=$?
+  drop_sign_in
   # A sign-in shut down at once would end with the device: it lives in cloudd's memory alone.
   [ "$status" != 0 ] || leave="it was signed in for the runs after this one"
   exit "$status"
@@ -769,6 +828,10 @@ if [ "$talk" = yes ]; then
     # The test uses the device whether or not this run booted it.
     touched=yes
     echo "==> the simulator booted after coreaudiod started, so it hears the lane without a reboot"
+  elif [ -e "$stopped" ]; then
+    # A boot here renews the sign-in, which a standing stop refuses: say so before a reboot
+    # takes down the screen the stop may have left up.
+    refuse_if_stopped "a boot onto the lane's audio devices would end it"
   elif [ -z "$booted" ]; then
     echo "==> booting the simulator onto the lane's audio devices"
     boot_device
@@ -776,7 +839,7 @@ if [ "$talk" = yes ]; then
   else
     echo "==> rebooting the simulator onto the lane's audio devices, since it booted before coreaudiod started"
     { lockf -s -t 120 7 || { echo "==> another run has held $simstate/mutex for 2 minutes" >&2; exit 1; }
-      users="$(others_using)"
+      users="$(users_now)"
       if [ -n "$users" ]; then
         echo "==> $udid booted before coreaudiod started and has to be rebooted to hear the lane, but these runs are using it; run --talk once they are done:" >&2
         printf '%s\n' "$users" | sed 's/^/      /' >&2
