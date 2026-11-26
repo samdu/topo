@@ -348,7 +348,7 @@ struct GitHubCodeSign: View {
     }
 }
 
-/// Topo over GitHub's page: he comes up from the foot of the screen at `look.mascot.swimSpeed`
+/// Topo over GitHub's page: he comes up from the foot of the screen at `look.settings.signOverPageSpeed`
 /// to his place, the top of the sign's board `look.settings.signOverPageTop` points under the
 /// safe area's top and centred, below the browser's bar on an iPhone, and only there takes the
 /// sign up, saying Copied a while before it shows the code. Under Reduce Motion he is put there.
@@ -378,7 +378,7 @@ struct GitHubSignOverPage: View {
                 .offset(y: seen.below ?? foot)
                 .onAppear {
                     if boardTop == nil { boardTop = board }
-                    seen.swim(from: foot, seconds: reduceMotion || foot <= 0 ? nil : foot / look.mascot.swimSpeed)
+                    seen.swim(from: foot, seconds: reduceMotion || foot <= 0 ? nil : foot / look.settings.signOverPageSpeed)
                 }
         }
     }
