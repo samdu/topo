@@ -6,6 +6,9 @@
 # anything runs (scripts/secret-env.sh), so no fake's record of its environment holds a real one;
 # CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails, or with --sign-in gives a
 # placeholder password the case then looks for everywhere it must not be.
+# It holds that a run that used the device shuts it down as it ends, passing, failing or signalled,
+# but not under another run or a run that leaves it up on purpose, and that a lapsed sign-in is
+# renewed once and never past a sign-in that stopped.
 # With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`,
 # and that `start` is given the script's own pid as the lane's owner.
 #
@@ -22,6 +25,9 @@ drop_secrets
 
 work="$(mktemp -d -t simulator-run-test)"
 trap 'rm -rf "$work"' EXIT
+# Where the script keeps the device's lock, its last use and a stopped sign-in: the work tree's,
+# never the Mac's, so no case reads or writes what a real run left.
+export TOPO_SIM_STATE="$work/simstate"
 
 # A tree shaped like the repo as far as the script looks: itself and what it sources under
 # scripts/, and a built app.
@@ -55,8 +61,9 @@ case "$2" in
   list) if [ -n "${FAKE_SIM_LIST:-}" ]; then echo "$FAKE_SIM_LIST"
         else echo '{"devices":{"iOS":[{"name":"iPhone 17","udid":"FAKE-UDID"}]}}'; fi ;;
   launch)
-    # The launcher's pid, for the test to hold that no run leaves one behind.
+    # The launcher's pid, for the test to hold that no run leaves one behind, and one line a launch.
     echo "$$" >"$FAKE_LAUNCHER_PID"
+    echo launch >>"${FAKE_LAUNCHES:-/dev/null}"
     # What the launch carries, which is what the simulator's log records, and the token the app
     # reads at launch from the port and nonce it was handed, unless FAKE_APP_UNREAD says it never asks.
     [ -z "${FAKE_LAUNCH_ENV:-}" ] || { echo "$*"; env; } >"$FAKE_LAUNCH_ENV"
@@ -92,6 +99,11 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
                              say "records: on this phone (no iCloud account when Topo was first opened), protection none"; say "done"; exec sleep 600 ;;
       no-account) say "icloud: no account"; say "done"; exec sleep 600 ;;
       unavailable) say "icloud: account temporarily unavailable"; say "done"; exec sleep 600 ;;
+      unavailable-then-answered)
+        if [ "$(wc -l <"$FAKE_LAUNCHES" | tr -d ' ')" -lt 2 ]; then say "icloud: account temporarily unavailable"; say "done"; exec sleep 600; fi
+        say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"
+        say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+        say "records: iCloud"; say "done"; exec sleep 600 ;;
       lapsed) say "icloud: no answer within 30 s"; say "done"; exec sleep 600 ;;
       refused) say "icloud: refused (CKError 9)"; exec sleep 600 ;;
       answered-by-nobody) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
@@ -247,6 +259,7 @@ esac
 case " $* " in *" TopoSimulatorSignIn "*)
   env | grep -v "^FAKE_APPLE_PASSWORD=" >"$FAKE_SIGNIN_ENV"  # the test's own copy is not the script's
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
+  if [ -n "${FAKE_SIGNIN_STOPS:-}" ]; then echo "[sign-in] stopped: Settings asks for a verification code"; echo "** TEST FAILED **"; exit 65; fi
   [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
   /usr/bin/python3 -c '
 import socket, sys
@@ -314,6 +327,7 @@ cat >"$work/bin/ps" <<'EOF2'
 #!/bin/bash
 c() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/^Sat/sam./; s/^Mon/lun./; s/^Wed/mer./; s/ Nov / nov. /'; fi; }
 case "$*" in
+  "-axo pid=,ppid=,command=") [ -z "${FAKE_PS_LIST:-}" ] || printf '%s\n' "$FAKE_PS_LIST" ;;
   "-o lstart= -p 501") echo "${FAKE_SIM_BOOTED} " | c ;;
   "-o lstart= -p 502") echo "${FAKE_AUDIO_STARTED:-Wed Nov 11 17:10:52 2026} " | c ;;
   *) exit 1 ;;
@@ -416,9 +430,6 @@ case_ send-icloud-refused                  fail refused              quick  --se
 case_ send-icloud-unavailable              fail unavailable          quick  --send hello
 # Signed in with CloudKit refusing the account is a sign-in a restart ended, which only a
 # sign-out and sign-in mend: the failure says so and names --renew.
-grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in --renew" "$work/send-icloud-unavailable.out" \
-  && grep -Fq "a restart of the simulator ends it with no prompt; a change of the account's password ends it" "$work/send-icloud-unavailable.out" \
-  || { echo "FAIL send-icloud-unavailable: the failure does not name the restart and --renew"; sed 's/^/    | /' "$work/send-icloud-unavailable.out"; failures=$((failures + 1)); }
 # A device with no account or a lapsed one is named, with the sign-in that mends it.
 for c in send-no-icloud-account send-icloud-lapsed send-icloud-refused; do
   grep -Fq "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in" "$work/$c.out" \
@@ -597,7 +608,7 @@ fi
 token="fake-claude-token-$$"
 : >"$FAKE_XCODEBUILD_CALLS"; : >"$work/talk.env"
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
-  FAKE_TALK_ENV="$work/talk.env" FAKE_TALK_GOT="$work/talk.got" \
+  FAKE_TALK_ENV="$work/talk.env" FAKE_TALK_GOT="$work/talk.got" FAKE_SIM_BOOTED="Sat Nov 14 13:32:28 2026" \
   "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk.out" 2>&1 </dev/null
 status=$?
 got="$(cat "$work/talk.got" 2>/dev/null)"
@@ -613,33 +624,40 @@ fi
 
 # --talk reboots the simulator only when it booted before coreaudiod started, since a reboot ends
 # its iCloud sign-in: one booted since hears the lane as it is, one shut down is booted, and one
-# rebooted says the sign-in is gone and names --renew.
+# rebooted is rebooted; a boot of either kind renews the sign-in before the test, and every run
+# shuts the device down as it ends.
 # reboot_case <name> <when the simulator booted, or empty> <simctl calls expected among boot/shutdown> [text]
 reboot_case() {
   local name="$1" out="$work/$1.out" status calls
   : >"$work/simctl.calls"
   PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
     FAKE_TALK_ENV="$work/$1.env" FAKE_TALK_GOT="$work/$1.got" FAKE_SIMCTL_CALLS="$work/simctl.calls" FAKE_SIM_BOOTED="$2" \
+    FAKE_APPLE_PASSWORD="fake-apple-$$" FAKE_SIGNIN_ENV="$work/$1.signin.env" FAKE_SIGNIN_GOT="$work/$1.signin.got" \
     FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" LC_ALL=fr_FR.UTF-8 \
     "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
   status=$?
   calls="$(grep -xE 'boot|shutdown' "$work/simctl.calls" | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$status" = 0 ] && [ "$calls" = "$3" ] && { [ -z "${4:-}" ] || grep -Fq "$4" "$out"; }; then
+  # A boot renews the sign-in, and only a boot does.
+  local renewed=no
+  grep -qx "TEST_RUNNER_TOPO_SIGNIN_RENEW=1" "$work/$1.signin.env" 2>/dev/null && renewed=yes
+  rm -f "$work/$1.signin.env"
+  if [ "$status" = 0 ] && [ "$calls" = "$3" ] && [ "$renewed" = "$4" ]; then
     echo "ok   $name: simctl was asked: ${calls:-neither boot nor shutdown}"
   else
-    echo "FAIL $name: exit $status, wanted '$3'${4:+ and \"$4\"}, simctl was asked '$calls'"
+    echo "FAIL $name: exit $status, wanted '$3' and a renewal: $4, simctl was asked '$calls', renewed: $renewed"
     sed 's/^/    | /' "$out" | grep -vF "$token"
     failures=$((failures + 1))
   fi
 }
-reboot_case talk-booted-since-audio  "Sat Nov 14 13:32:28 2026" ""
-reboot_case talk-booted-before-audio "Mon Nov  9 09:05:01 2026" "shutdown boot" "scripts/simulator-run.sh --sign-in --renew"
-reboot_case talk-shut-down           ""                         "boot"
+reboot_case talk-booted-since-audio  "Sat Nov 14 13:32:28 2026" "shutdown"               no
+# The renewal's own boot finds the device up.
+reboot_case talk-booted-before-audio "Mon Nov  9 09:05:01 2026" "shutdown boot boot shutdown" yes
+reboot_case talk-shut-down           ""                         "boot boot shutdown"          yes
 
 # A talk test that passes without the app having read the token (the app ran on some other
 # login) fails the run.
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_TALK_TOKEN="$token" FAKE_LAUNCH=silent FAKE_LANE_START=0 \
-  FAKE_TALK_ENV="$work/talk-unread.env" FAKE_TALK_GOT="$work/talk-unread.got" FAKE_TALK_UNREAD=1 \
+  FAKE_TALK_ENV="$work/talk-unread.env" FAKE_TALK_GOT="$work/talk-unread.got" FAKE_TALK_UNREAD=1 FAKE_SIM_BOOTED="Sat Nov 14 13:32:28 2026" \
   "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk-unread.out" 2>&1 </dev/null
 status=$?
 if [ "$status" != 0 ] && grep -q "the app never read the served token" "$work/talk-unread.out"; then
@@ -885,6 +903,79 @@ if [ "$status" = 0 ] && ! grep -q 'TOKEN' "$work/userland.env"; then
 else
   echo "FAIL userland-no-token: exit $status, the launch carried: $(grep -o '^[A-Z_]*TOKEN[A-Z_]*' "$work/userland.env" | tr '\n' ' ')"
   failures=$((failures + 1))
+fi
+
+# The device as a run leaves it. A run that used it shuts it down as it ends, passing or failing,
+# unless another run is using it (a simulator-run.sh, or an xcodebuild or simctl naming the udid;
+# a process that only mentions the script is none) or the run is one that leaves it up on purpose:
+# a launch to drive by hand, a sign-in, a sign-in that stopped. A lapsed sign-in is renewed once
+# and the app launched again; a renewal that stopped is never tried again until a --sign-in passes.
+# sim_case <name> <pass|fail> <shut down: yes|no> <text the output carries, or ""> <sign-ins> [VAR=value ...] -- <args>
+sim_case() {
+  local name="$1" want="$2" shut="$3" text="$4" signins="$5"; shift 5
+  local envs=() out="$work/$name.out" status got downs ran
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done; shift
+  : >"$work/simctl.calls"; : >"$FAKE_XCODEBUILD_CALLS"; : >"$work/$name.launches"
+  env PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=30 FAKE_SIMCTL_CALLS="$work/simctl.calls" \
+    FAKE_APPLE_PASSWORD="fake-apple-$$" FAKE_SIGNIN_ENV="$work/$name.signin.env" FAKE_SIGNIN_GOT="$work/$name.signin.got" \
+    FAKE_LAUNCHES="$work/$name.launches" "${envs[@]}" "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null
+  status=$?
+  if [ "$status" = 0 ]; then got=pass; else got=fail; fi
+  downs="$(grep -cx shutdown "$work/simctl.calls")"
+  ran="$(grep -c ' TopoSimulatorSignIn ' "$FAKE_XCODEBUILD_CALLS")"
+  local wanted=0; [ "$shut" = no ] || wanted=1
+  if [ "$got" = "$want" ] && [ "$downs" = "$wanted" ] \
+     && [ "$ran" = "$signins" ] && { [ -z "$text" ] || grep -Fq -- "$text" "$out"; }; then
+    echo "ok   $name: exited $status, shut down: $shut, sign-ins: $ran"
+  else
+    echo "FAIL $name: exited $status (wanted $want), shutdowns $downs (wanted $shut), sign-ins $ran (wanted $signins)${text:+, wanted the text \"$text\"}"
+    sed 's/^/    | /' "$out"
+    failures=$((failures + 1))
+  fi
+}
+sim_case sim-send-answered-shuts      pass yes "" 0 FAKE_LAUNCH=answered -- --send hello
+sim_case sim-send-failed-shuts        fail yes "" 0 FAKE_LAUNCH=no-reply -- --send hello
+sim_case sim-userland-shuts           pass yes "" 0 FAKE_LAUNCH=userland-fetched -- --userland "echo hi"
+sim_case sim-sibling-run-keeps        pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  999     1 /opt/homebrew/bin/bash scripts/simulator-run.sh --send hi" -- --send hello
+sim_case sim-sibling-xcodebuild-keeps pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  998     1 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -destination platform=iOS Simulator,id=FAKE-UDID" -- --send hello
+sim_case sim-mention-is-no-run        pass yes "" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  997     1 claude --name x Task: mend scripts/simulator-run.sh on FAKE-UDID" -- --send hello
+sim_case sim-hand-launch-keeps        pass no "driven by hand" 0 FAKE_LAUNCH=launched --
+sim_case sim-sign-in-keeps            pass no "signed in for the runs after this one" 1 FAKE_LAUNCH=silent -- --sign-in
+rm -f "$TOPO_SIM_STATE/renewals.log"
+sim_case sim-renews-and-relaunches    pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello
+if [ "$(wc -l <"$work/sim-renews-and-relaunches.launches" | tr -d ' ')" = 2 ] \
+   && grep -qx "TEST_RUNNER_TOPO_SIGNIN_RENEW=1" "$work/sim-renews-and-relaunches.signin.env" \
+   && [ "$(wc -l <"$TOPO_SIM_STATE/renewals.log" | tr -d ' ')" = 1 ]; then
+  echo "ok   sim-renewal-is-a-renew: launched twice around one --renew sign-in, logged once"
+else
+  echo "FAIL sim-renewal-is-a-renew: launches $(wc -l <"$work/sim-renews-and-relaunches.launches"), $(grep RENEW "$work/sim-renews-and-relaunches.signin.env"), renewals: $(cat "$TOPO_SIM_STATE/renewals.log" 2>/dev/null)"
+  failures=$((failures + 1))
+fi
+sim_case sim-still-unavailable-fails  fail yes "DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in --renew" 1 FAKE_LAUNCH=unavailable -- --send hello
+sim_case sim-renewal-stops            fail no "SIGNIN_CODE=<code> DEVICE=FAKE-UDID scripts/simulator-run.sh --sign-in" 1 \
+  FAKE_LAUNCH=unavailable FAKE_SIGNIN_STOPS=1 -- --send hello
+sim_case sim-no-renewal-past-a-stop   fail no "so this run types no password" 0 FAKE_LAUNCH=unavailable -- --send hello
+sim_case sim-sign-in-clears-the-stop  pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
+[ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" ] \
+  && sim_case sim-renews-after-the-stop pass yes "renewing it" 1 FAKE_LAUNCH=unavailable-then-answered -- --send hello \
+  || { echo "FAIL sim-sign-in-clears-the-stop: the stop still stands"; failures=$((failures + 1)); }
+
+# A run ended by a signal shuts the device down too.
+: >"$work/simctl.calls"; : >"$work/term.launches"
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent FAKE_SIMCTL_CALLS="$work/simctl.calls" \
+  FAKE_LAUNCHES="$work/term.launches" "$work/root/scripts/simulator-run.sh" --no-build --send hello >"$work/term.out" 2>&1 </dev/null &
+termed=$!
+for _ in $(seq 100); do [ -s "$work/term.launches" ] && break; /bin/sleep 0.1; done
+/bin/sleep 0.5
+kill -TERM "$termed"; wait "$termed"; status=$?
+if [ "$status" = 143 ] && [ "$(grep -cx shutdown "$work/simctl.calls")" = 1 ]; then
+  echo "ok   sim-terminated-shuts: a TERM mid-turn exits 143 and shuts the device down"
+else
+  echo "FAIL sim-terminated-shuts: exit $status, simctl: $(tr '\n' ' ' <"$work/simctl.calls")"
+  sed 's/^/    | /' "$work/term.out"; failures=$((failures + 1))
 fi
 
 if [ "$failures" -gt 0 ]; then

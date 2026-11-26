@@ -78,7 +78,11 @@ judgement:
   9. reports, once per head, an open PR whose dev slot (slots.json) carries
      another commit than its head while the PR is final (`FINAL_GATE`) and
      the head has passed its suites (`GATE`), the two gates publish-topo.sh
-     builds behind: a build never recut. A PR in review is not final.
+     builds behind: a build never recut. A PR in review is not final;
+ 10. reports a vm-linux pool that is not serving;
+ 11. shuts down the signed-in simulator, or one simulator-run.sh has used,
+     once it has stood booted with nothing using it for `SIM_IDLE`, under
+     simulator-run.sh's own lock.
 
 Step 2 takes a run cancelled inside the reviewer chain alone (codex past its
 time limit) as a reviewer that never ran, and reruns any other cancelled run
@@ -167,6 +171,9 @@ DIGEST_NAMES = 40                  # PRs, and issues, the digest names before it
 SWEEP = timedelta(hours=24)        # a merged branch's worktree lives this long
 PUBLISH_RETRY = timedelta(hours=2)  # a publish is not tried again for one commit inside this
 PUBLISH_KEEP = timedelta(days=7)   # publish records older than this are forgotten
+SIM_IDLE = timedelta(minutes=30)   # a simulator-run.sh device booted with nothing using it is shut after this
+SIM_STATE = "~/Library/Caches/topo-sim"   # simulator-run.sh's lock and last use (TOPO_SIM_STATE)
+SIGNED_IN_SIMULATOR = "B2A3C283-54BE-4AB2-825F-2E507EFF8739"   # the iCloud-signed-in iPhone 17 (docs/simulator.md)
 PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)
@@ -1113,6 +1120,49 @@ def decide_sweep(worktrees, checkout, history, now):
     return out
 
 
+def sim_users(udid, procs):
+    """The processes in `procs`, [(pid, argv)], using the simulator `udid`, as
+    scripts/simulator-run.sh's `others_using` reads them: a simulator-run.sh
+    (on any device, since DEVICE is not in its arguments), or an xcodebuild or
+    simctl naming the udid. A process that only mentions the script is none."""
+    out = []
+    for pid, argv in procs:
+        if not argv:
+            continue
+        prog = os.path.basename(argv[0])
+        arg = os.path.basename(argv[1]) if len(argv) > 1 else ""
+        using = "simulator-run.sh" in (prog, arg)
+        if not using and prog in ("xcodebuild", "xcrun", "simctl"):
+            using = any(a == udid or a.endswith("id=" + udid) for a in argv[1:])
+        if using:
+            out.append(f"{pid} {' '.join(argv)[:120]}")
+    return out
+
+
+def decide_simulators(devices, targets, last_use, seen, users, now):
+    """The simulators to shut down, and the new record of when each target was
+    first seen booted. A target is the signed-in device or one simulator-run.sh
+    has used (`targets`), never the agent's or a suite's own. One booted with
+    nothing using it (`users(udid)`) is shut once it has stood SIM_IDLE since
+    the later of its last use and the pass that first saw it booted or in use,
+    so a boot that no run stamped is given SIM_IDLE from this janitor's first
+    sight of it."""
+    shut, kept = [], {}
+    for d in devices:
+        udid, name = d.get("udid"), d.get("name") or ""
+        if udid not in targets or d.get("state") != "Booted" or name == "Topo Agent" or name.startswith("topo-validate-"):
+            continue
+        if users(udid):
+            kept[udid] = now.isoformat()
+            continue
+        first = parse_time(seen.get(udid)) or now
+        kept[udid] = first.isoformat()
+        since = max(t for t in (first, last_use.get(udid)) if t)
+        if now - since >= SIM_IDLE:
+            shut.append({"udid": udid, "name": name, "idle": now - since})
+    return shut, kept
+
+
 def due(state, key, now):
     """A report key is due when it has not fired inside REPEAT."""
     last = parse_time(state.get("fired", {}).get(key))
@@ -1420,6 +1470,26 @@ class Shell:
 
     def pr_history(self, branch):
         return self.listed(100, "--state", "all", "--head", branch, "--json", "number,state,mergedAt,headRefOid")
+
+    def simulators(self):
+        """Every simulator as {udid, name, state}."""
+        try:
+            listed = json.loads(self.run(["xcrun", "simctl", "list", "devices", "-j"]).stdout)["devices"]
+        except (ValueError, KeyError, TypeError) as ex:
+            raise RuntimeError(f"simctl list gave no device list: {ex}")
+        return [d for ds in listed.values() for d in ds]
+
+    def processes(self):
+        """Every process as (pid, argv split on whitespace)."""
+        out = []
+        for l in self.run(["ps", "-axo", "pid=,command="]).stdout.splitlines():
+            f = l.split()
+            if len(f) > 1 and f[0].isdigit():
+                out.append((int(f[0]), f[1:]))
+        return out
+
+    def shutdown_simulator(self, udid):
+        self.run(["xcrun", "simctl", "shutdown", udid], timeout=120, mutating=True)
 
     def tmux_panes(self):
         """Every pane of every session as (session, current path)."""
@@ -1989,6 +2059,48 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 say(key, f"worktree {name} ({wt['branch']}, #{wt['number']} merged) will not remove: {ex}")
     except RuntimeError as ex:
         say("sweep:read", f"could not read the worktrees: {ex}")
+
+    # 11: simulator-run.sh's devices left booted with nothing using them. The
+    # shutdown is made under simulator-run.sh's own lock, with the processes
+    # read again under it, so a run booting the device is never shut under.
+    try:
+        simstate = os.path.expanduser(os.environ.get("TOPO_SIM_STATE", SIM_STATE))
+        stamps = {}
+        if os.path.isdir(simstate):
+            for f in os.listdir(simstate):
+                if f.endswith(".last-use"):
+                    stamps[f[:-len(".last-use")]] = datetime.fromtimestamp(os.path.getmtime(os.path.join(simstate, f)), timezone.utc)
+        procs = sh.processes()
+        shut, state["simulators"] = decide_simulators(sh.simulators(), {SIGNED_IN_SIMULATOR, *stamps}, stamps,
+                                                      state.get("simulators", {}), lambda u: sim_users(u, procs), now)
+        state["fired"].pop("simulators:read", None)
+        for d in shut:
+            name = f"{d['name']} ({d['udid']})"
+            lock = None
+            try:
+                if not sh.dry:
+                    os.makedirs(simstate, exist_ok=True)
+                    lock = open(os.path.join(simstate, "mutex"), "w")
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError:
+                        quiet.append(f"simulator {name}: a run holds its lock; left")
+                        continue
+                users = sim_users(d["udid"], sh.processes())
+                if users:
+                    quiet.append(f"simulator {name}: in use by {users[0]}; left")
+                    continue
+                sh.shutdown_simulator(d["udid"])
+                state["simulators"].pop(d["udid"], None)
+                lines.append(f"shut down simulator {name}: booted with nothing using it for {minutes(d['idle'])}.")
+                persist()
+            except RuntimeError as ex:
+                say(f"simulator:{d['udid']}", f"simulator {name} would not shut down: {ex}")
+            finally:
+                if lock:
+                    lock.close()
+    except RuntimeError as ex:
+        say("simulators:read", f"could not read the simulators: {ex}")
 
     # 6: the open issues nobody has triaged.
     # Issue lines are the first cut: the pass's PR lines come first, a pass
