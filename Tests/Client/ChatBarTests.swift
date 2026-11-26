@@ -42,7 +42,7 @@ final class ChatBarTests: XCTestCase {
     /// the geometry.
     private func hand(_ roam: inout MascotRoam, _ field: MascotField, _ placement: Look.Mascot.Placement = .roam,
                       at time: Double) {
-        roam.use(MascotPerch.sliding(Self.settings(placement), under: field, swim: 240))
+        roam.use(MascotPerch.sliding(Self.settings(placement), under: field))
         roam.observe(field, at: time)
     }
 
@@ -89,10 +89,9 @@ final class ChatBarTests: XCTestCase {
             XCTAssertEqual(box.midX, stop.midX, accuracy: 1e-9)
             XCTAssertEqual(box.minY, Self.visible.minY + Self.reach.top, accuracy: 1e-9)
             XCTAssertEqual(box.size, Self.size)
-            let sliding = MascotPerch.sliding(Self.settings(.glass), under: field, swim: 240)
+            let sliding = MascotPerch.sliding(Self.settings(.glass), under: field)
             XCTAssertEqual(sliding.placement, .pinned)
             XCTAssertTrue(sliding.sliding)
-            XCTAssertEqual(sliding.speed, 240)
         }
         for x in [-200, 0, 402, 900] as [CGFloat] {
             var field = Self.field()
@@ -111,8 +110,8 @@ final class ChatBarTests: XCTestCase {
         low.stop = CGRect(x: 100, y: Self.visible.minY, width: 40, height: low.room(Self.reach).height - Self.size.height + 1)
         XCTAssertNil(MascotPerch.under(low, size: Self.size, reach: Self.reach))
         for placement in Look.Mascot.Placement.allCases {
-            XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: Self.field(), swim: 240), Self.settings(placement))
-            XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: nil, swim: 240), Self.settings(placement))
+            XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: Self.field()), Self.settings(placement))
+            XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: nil), Self.settings(placement))
         }
     }
 
@@ -136,8 +135,7 @@ final class ChatBarTests: XCTestCase {
                 hand(&roam, Self.field(stop: 0, keyboard: keyboard), placement, at: time)
                 let there = try XCTUnwrap(roam.move, "\(what): put under the slider rather than glided")
                 XCTAssertEqual(there.from, home, what)
-                XCTAssertEqual(there.duration, Double(hypot(there.to.x - home.x, there.to.y - home.y) / 240), accuracy: 1e-9,
-                               "\(what): not at the swim")
+                XCTAssertEqual(there.pace, Double(Self.settings().hurry), accuracy: 1e-9, "\(what): not hurried")
                 XCTAssertEqual(roam.moves, moves + 1, what)
                 run(&roam, time: &time)
                 let first = try XCTUnwrap(MascotPerch.under(Self.field(stop: 0, keyboard: keyboard), size: Self.size, reach: Self.reach))
@@ -164,8 +162,8 @@ final class ChatBarTests: XCTestCase {
                 } else {
                     let back = try XCTUnwrap(roam.move, "\(what): jumped away from the slider")
                     XCTAssertEqual(back.from, hung, what)
-                    // He goes home as he came, at the swim: six times these settings' stroll.
-                    XCTAssertEqual(back.pace, 240 / 40, accuracy: 1e-9, "\(what): strolled home")
+                    // He goes home as he came, in a hurry.
+                    XCTAssertEqual(back.pace, Double(Self.settings().hurry), accuracy: 1e-9, "\(what): not hurried home")
                     XCTAssertEqual(roam.position, hung, "\(what): moved before the glide")
                 }
                 run(&roam, time: &time)
@@ -247,14 +245,14 @@ final class ChatBarTests: XCTestCase {
                 var settings = Self.settings(.roam)
                 settings.size = size
                 settings.reach = reach
-                XCTAssertEqual(MascotPerch.sliding(settings, under: field, swim: 240), settings)
+                XCTAssertEqual(MascotPerch.sliding(settings, under: field), settings)
             }
         }
         // Not called, he is still to be had by a finger while the slider is open, as one called
         // is not: it is the pin that keeps him from a finger, not the open slider.
         let open = Self.field(stop: 1)
         for called in [false, true] {
-            let settings = called ? MascotPerch.sliding(Self.settings(), under: open, swim: 240) : Self.settings()
+            let settings = called ? MascotPerch.sliding(Self.settings(), under: open) : Self.settings()
             XCTAssertEqual(settings.sliding, called)
             var roam = MascotRoam(settings, frame: Self.frame)
             var time = 0.0
@@ -309,14 +307,6 @@ final class ChatBarTests: XCTestCase {
         XCTAssertEqual(mascot.state.model, ClaudeModel.haiku.rawValue)
         mascot.chosen = nil
         XCTAssertEqual(mascot.drawn, mascot.state)
-    }
-
-    /// The swim is a speed of the look's, read in the stroll's range.
-    func testTheSwimIsReadInTheStrollsRange() {
-        XCTAssertEqual(LookDocument.read(#"{"mascot": {"swimSpeed": 400}}"#).look.mascot.swimSpeed, 400)
-        let slow = LookDocument.read(#"{"mascot": {"swimSpeed": 9}}"#)
-        XCTAssertEqual(slow.look.mascot.swimSpeed, Look().mascot.swimSpeed)
-        XCTAssertEqual(slow.notes.count, 1, "\(slow.notes)")
     }
 
     // MARK: Names

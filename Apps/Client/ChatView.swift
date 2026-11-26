@@ -547,13 +547,16 @@ struct ChatView: View {
         // off, or a voice that is not resident.
         // The wait says whether the reply will be read aloud, which is what marks the turn as
         // spoken; whether the process is being kept running for it is its own answer, and this
-        // screen states no condition of its own either way.
+        // screen states no condition of its own either way. The mute is asked of the defaults at
+        // the send, not of this view's copy: the open microphone sends through the closure the
+        // chat's task installed when the screen appeared, and once what holds the chat draws it
+        // again that closure's copy of the view no longer sees the mute change (#793).
         // What was heard stands in the row as the turn on its way, rather than vanishing between
         // the release and the log: the bubble being written in is the bubble that lands.
         guard let nonce = row.send(heard: heard, via: harness) else { return }
         // Said into the microphone: its hearing is part of its time (`topo perf`).
         Perf.mark("turn.spoken \(Harness.turnMark(nonce))")
-        if speaker.awaitReply(nonce, readAloud: readAloud).spoken { harness.markSpoken(nonce) }
+        if speaker.awaitReply(nonce, readAloud: Mute.readsAloud()).spoken { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce
         #endif
@@ -1038,6 +1041,9 @@ enum SpokenReply {
 
     /// The mute pressed: muting ends what is being read and what was waited for, as Stop does.
     static func muteChanged(readsAloud: Bool, speaker: Speaker) {
+        // What the button asked for beside what the setting reads back, so a log says which of
+        // the two held a stale value.
+        AudioLog.say("mute pressed: \(readsAloud ? "read replies aloud" : "mute replies"); the setting reads \(Mute.readsAloud() ? "read aloud" : "muted")")
         if !readsAloud { speaker.stop() }
     }
 

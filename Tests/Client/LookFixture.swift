@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 268
+    static let fields = 271
 
     static let full = """
     {
@@ -147,8 +147,8 @@ enum LookFixture {
       },
       "settings": { "tint": ["#336699", "#99CCFF"], "codeFont": { "style": "largeTitle", "weight": "black" }, "broadcastButton": 60,
                     "signScale": 2, "signSpacing": 10, "signFont": { "style": "caption", "weight": "medium" },
-                    "signInk": ["#404850", "#B0B8C0"], "copiedInk": ["#205080", "#80C0F0"], "copiedBump": 1.15,
-                    "copiedPause": 1.5 },
+                    "signInk": ["#404850", "#B0B8C0"], "copiedBump": 1.15,
+                    "copiedPause": 1.5, "signOverPageScale": 1.25, "signOverPageTop": 90, "signOverPageSpeed": 300 },
       "composer": {
         "widthFraction": 0.55,
         "typingWidthFraction": 0.7,
@@ -209,10 +209,11 @@ enum LookFixture {
       "mascot": {
         "scale": 2,
         "clearance": 12,
-        "roamSpeed": 60,
-        "swimSpeed": 310,
+        "stride": 60,
         "roamSettle": 1.5,
-        "hurry": 4,
+        "hurry": 2.5,
+        "swimInterval": 0.02,
+        "workInterval": 0.04,
         "frameInterval": 0.05,
         "restInterval": 0.1,
         "restAfter": 6,
