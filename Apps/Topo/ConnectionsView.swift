@@ -367,8 +367,9 @@ struct GitHubSignOverPage: View {
         let scale = look.settings.signOverPageScale
         let size = CGSize(width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
         let board = boardTop ?? GitHubCodeSign.boardTop(mascot, words: code)
-        let top = look.settings.signOverPageTop - CGFloat(board) * scale
         GeometryReader { proxy in
+            let top = Self.top(board: CGFloat(board) * scale, wanted: look.settings.signOverPageTop,
+                               picture: size.height, room: proxy.size.height)
             let foot = proxy.size.height + proxy.safeAreaInsets.bottom - top
             GitHubCodeSign(code: code, raised: seen.arrived, copies: copies, scale: scale, hint: "Copies the code",
                            identifier: "github-code-sign-over-page", overPage: true, seen: seen) { _ in copy() }
@@ -380,6 +381,14 @@ struct GitHubSignOverPage: View {
                     seen.swim(from: foot, seconds: reduceMotion || foot <= 0 ? nil : foot / look.mascot.swimSpeed)
                 }
         }
+    }
+
+    /// Where his picture's top stands in the safe area: the board's top (`board` points down the
+    /// picture) `wanted` points down, but never so low that the picture's foot is past the
+    /// safe area's (`room` tall) — a top the look allows on a tall phone is below a short
+    /// landscape one — nor so high that the board is over its top.
+    static func top(board: CGFloat, wanted: CGFloat, picture: CGFloat, room: CGFloat) -> CGFloat {
+        max(-board, min(wanted - board, room - picture))
     }
 }
 
@@ -394,9 +403,6 @@ struct GitHubSignOverPage: View {
     /// Points below his place he is drawn at; nil before his swim has begun, which is the foot.
     private(set) var below: CGFloat?
     @ObservationIgnored private var swimming: Task<Void, Never>?
-    /// Every leave, counted, so a swim's clock that wakes after one arrives nowhere: a cancel
-    /// that lands between the sleep's end and the task's next step would not stop it.
-    @ObservationIgnored private var leaves = 0
 
     /// Swims him up from `foot` points below his place over `seconds`, SwiftUI's animation and
     /// so drawn at the display's rate, and has him arrive when its time is up, by the clock; with
@@ -410,17 +416,19 @@ struct GitHubSignOverPage: View {
             return
         }
         withAnimation(.easeInOut(duration: seconds)) { below = 0 }
-        let leaves = leaves
+        // A leave can land between the sleep's end and the task's next step, where the sleep
+        // no longer throws, so the cancellation is checked again after it.
         swimming = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(Int(seconds * 1000))) } catch { return }
-            guard let self, self.leaves == leaves else { return }
-            self.arrived = true
+            do {
+                try await Task.sleep(for: .milliseconds(Int(seconds * 1000)))
+                try Task.checkCancellation()
+            } catch { return }
+            self?.arrived = true
         }
     }
 
     /// The page has gone: the next one he swims up over again.
     func leave() {
-        leaves += 1
         swimming?.cancel()
         swimming = nil
         arrived = false

@@ -322,6 +322,19 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertLessThan(code, Topo.height / 2 + 20, "the board's top is not above his head")
     }
 
+    /// His picture stands with its board where the look puts it while the safe area has room,
+    /// and is held on the screen where it has not: a top of 400 on a 390-point-high landscape
+    /// screen keeps the whole picture, board included, in sight.
+    func testHisPlaceIsKeptOnAShortScreen() {
+        let board: CGFloat = 79, picture: CGFloat = 160
+        XCTAssertEqual(GitHubSignOverPage.top(board: board, wanted: 84, picture: picture, room: 700), 5)
+        let short = GitHubSignOverPage.top(board: board, wanted: 400, picture: picture, room: 330)
+        XCTAssertEqual(short + picture, 330, "his picture's foot is past the screen's")
+        XCTAssertGreaterThanOrEqual(short + board, 0, "his board is over the screen's top")
+        XCTAssertEqual(GitHubSignOverPage.top(board: board, wanted: 84, picture: picture, room: 100), -board,
+                       "on a screen shorter than he is, the board is not kept at its top")
+    }
+
     /// Over GitHub's page a touch is his only on a drawn pixel of him, inside his frame, once he
     /// is in his place; anywhere else it is the page's.
     func testATouchIsTakenOnlyOnWhatIsDrawn() throws {
