@@ -783,11 +783,12 @@ final class ConnectionsScreenshots: XCTestCase {
         func above() -> AboveSheetsWindow? {
             scene.windows.compactMap { $0 as? AboveSheetsWindow }.first { !$0.isHidden }
         }
-        func until(_ what: String, seconds: TimeInterval = 5, _ done: () throws -> Bool) async throws {
+        func until(_ what: String, seconds: TimeInterval = 5, every pause: Duration = .milliseconds(100),
+                   _ done: () throws -> Bool) async throws {
             let deadline = Date().addingTimeInterval(seconds)
             while try !done() {
                 guard Date() < deadline else { throw Missed(what: what) }
-                try await Task.sleep(for: .milliseconds(100))
+                try await Task.sleep(for: pause)
             }
         }
         /// The window over the page's that a touch at `point` reaches, if any: the topmost shown
@@ -815,11 +816,13 @@ final class ConnectionsScreenshots: XCTestCase {
             return (image, box)
         }
         /// He is in his place: the window is the scene's, and the top of what is drawn, his
-        /// sign's board, stands `signOverPageTop` under the safe area's top, centred.
+        /// sign's board, stands `signOverPageTop` under the safe area's top, centred. A drawing
+        /// of the window takes the main thread a while on a simulator, and his frames, which take
+        /// the sign up, come on it too, so it is looked at twice a second.
         func placed(_ why: String) async throws -> (window: AboveSheetsWindow, box: CGRect, image: UIImage) {
             var last = CGRect.null
             do {
-                try await until("placed him \(why)", seconds: 10) {
+                try await until("placed him \(why)", seconds: 30, every: .milliseconds(500)) {
                     guard let window = above(), window.frame == scene.coordinateSpace.bounds else { return false }
                     last = try drawing(window).box
                     let top = window.safeAreaInsets.top + Look().settings.signOverPageTop
