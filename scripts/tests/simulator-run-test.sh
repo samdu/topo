@@ -107,6 +107,12 @@ open(out, "wb").write(got)' "$SIMCTL_CHILD_TOPO_DEBUG_TOKEN_PORT" "${SIMCTL_CHIL
         say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
         say "records: iCloud"; say "done"; exec sleep 600 ;;
       lapsed) say "icloud: no answer within 30 s"; say "done"; exec sleep 600 ;;
+      # A boot's lapse: CloudKit hangs until a sign-in has passed since the boot.
+      lapsed-until-renewed)
+        if ! grep -q ' TopoSimulatorSignIn ' "$FAKE_XCODEBUILD_CALLS"; then say "icloud: no answer within 30 s"; say "done"; exec sleep 600; fi
+        say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"
+        say "mascot: turn gone for phone/2, idle"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+        say "records: iCloud"; say "done"; exec sleep 600 ;;
       refused) say "icloud: refused (CKError 9)"; exec sleep 600 ;;
       answered-by-nobody) say "icloud: answered"; say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                           say "reply to phone/2 in run $run from session none, process none: hi"; say "done"; exec sleep 600 ;;
@@ -1044,7 +1050,10 @@ sim_case sim-destination-field-keeps  pass no "left booted for the runs using it
 sim_case sim-other-destination-shuts  pass yes "" 0 FAKE_LAUNCH=answered \
   "FAKE_PS_LIST=  992     1 xcodebuild test -destination platform=iOS Simulator,id=FAKE-UDID-2,OS=latest" -- --send hello
 sim_case sim-unread-processes-keep    pass no "the process list could not be read" 0 FAKE_LAUNCH=answered FAKE_PS_FAILS=1 -- --send hello
+sim_case sim-cold-send-unrecorded     fail yes "scripts/simulator-run.sh --sign-in --renew" 0 FAKE_LAUNCH=lapsed-until-renewed FAKE_SIM_BOOTS=fresh -- --send hello
 touch "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
+sim_case sim-cold-send-renews         pass yes "renewing it" 1 FAKE_LAUNCH=lapsed-until-renewed FAKE_SIM_BOOTS=fresh -- --send hello
+sim_case sim-cold-send-renews-once    fail yes "scripts/simulator-run.sh --sign-in --renew" 1 FAKE_LAUNCH=unavailable FAKE_SIM_BOOTS=fresh -- --send hello
 sim_case sim-hand-launch-keeps        pass no "driven by hand" 0 FAKE_LAUNCH=launched --
 sim_case sim-hand-launch-renews       pass no "driven by hand" 1 FAKE_LAUNCH=launched FAKE_SIM_BOOTS=fresh --
 sim_case sim-guest-turn-renews        pass yes "renewing it" 1 FAKE_LAUNCH=guest-answered FAKE_SIM_BOOTS=fresh -- --guest-turn "a || b"

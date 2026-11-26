@@ -61,9 +61,10 @@
 # password, and CloudKit answers "temporarily unavailable"; a change of the account's password
 # ends it without a restart, with an Apple Account Verification alert. --renew signs the account out in
 # Settings and in again, typing the password once. A --send whose iCloud check answers "account
-# temporarily unavailable" renews it itself, once a run, as do a --talk, a --guest-turn and a launch
-# to drive by hand on a device the run booted, when a sign-in has passed on it since its last --erase
-# (<udid>.signed-in); each renewal is logged with why in ~/Library/Caches/topo-sim/renewals.log.
+# temporarily unavailable" renews it itself; a boot leaves CloudKit hanging rather than answering,
+# so a --send, a --talk, a --guest-turn and a launch to drive by hand renew a device the run booted
+# before they launch, when a sign-in has passed on it since its last --erase (<udid>.signed-in).
+# A run renews once at most; each renewal is logged with why in ~/Library/Caches/topo-sim/renewals.log.
 # A sign-in that stopped is recorded there (<udid>.sign-in-stopped): no run renews that device until
 # a --sign-in passes, nor shuts it down within the half hour its code screen may stand, since a refused password typed again is how an
 # account is locked.
@@ -217,6 +218,8 @@ simstate="${TOPO_SIM_STATE:-$HOME/Library/Caches/topo-sim}"
 mkdir -p "$simstate"
 touched=no
 booted_here=no
+# Whether this run has renewed the device's sign-in, which it does once at most.
+renewed=no
 leave=""
 stopped="$simstate/$udid.sign-in-stopped"
 # A sign-in of the account passed on this device since its last --erase: the evidence a boot of it
@@ -317,7 +320,7 @@ release_device() {
         echo "==> $udid is left booted for the runs using it:"
         printf '%s\n' "$users" | sed 's/^/      /'
       elif timeout 120 xcrun simctl shutdown "$udid" 7>&- >/dev/null 2>&1; then
-        echo "==> $udid is shut down; its iCloud sign-in ends with it, and the next --send renews it"
+        echo "==> $udid is shut down; its iCloud sign-in ends with it, and the next run that boots it renews it"
       else
         echo "==> $udid would not shut down; the janitor tries again once it has stood idle"
       fi
@@ -784,6 +787,7 @@ renew_sign_in() {
   if [ "$signed_meanwhile" = yes ]; then
     echo "==> $udid's iCloud sign-in had lapsed ($why), and another run's sign-in has renewed it since this run found it so"
     drop_sign_in
+    renewed=yes
     return 0
   fi
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $udid $why ($root)" >>"$simstate/renewals.log"
@@ -791,6 +795,7 @@ renew_sign_in() {
   renew=yes
   sign_in || status=$?
   renew=no
+  renewed=yes
   drop_sign_in
   if [ "$status" != 0 ]; then
     echo "==> the renewal stopped, and no run renews this device again until a --sign-in passes. A two-factor stop leaves its code screen up: SIGNIN_CODE=<code> DEVICE=$udid scripts/simulator-run.sh --sign-in types the code and goes on" >&2
@@ -846,7 +851,9 @@ drop_sign_in() { exec 6>&-; }
 # Renews the sign-in after this run booted the device, which ended it, when a sign-in has passed
 # on it before: a device with none recorded is not signed in for the first time unasked.
 renew_after_boot() {
-  if [ -e "$signedin" ]; then
+  if [ "$renewed" = yes ]; then
+    return 0
+  elif [ -e "$signedin" ]; then
     renew_sign_in "$1"
   else
     echo "==> $udid has no sign-in recorded since its last --erase, so the run renews nothing; if it has an account, DEVICE=$udid scripts/simulator-run.sh --sign-in --renew"
@@ -983,11 +990,14 @@ if [ "$fresh" = yes ]; then
   xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
 fi
 xcrun simctl install "$udid" "$app"
-# A launch to drive by hand or for guest turns has no iCloud check to find a lapse at, and the
-# role it decides from CloudKit's records can sign the launch out (a viewer's arrival), which the
-# resident refuses to start under; so one on a device this run booted is renewed first. A guest
-# command alone needs no sign-in; a --send renews at its check.
-if [ -z "$send$userland" ] && [ "$booted_here" = yes ]; then
+# A boot ends the device's sign-in, and CloudKit's requests on a device a boot left so hang rather
+# than refusing (docs/simulator.md, *A lapse*), so a --send's check would find only no answer, which
+# a network fault gives too. A launch to drive by hand or for guest turns has no check to find a
+# lapse at, and the role it decides from CloudKit's records can sign the launch out (a viewer's
+# arrival), which the resident refuses to start under. So every run but a guest command alone, which
+# needs no sign-in, renews a device it booted before it launches; a --send on a device it did not
+# boot renews at its check.
+if [ -z "$userland" ] && [ "$booted_here" = yes ]; then
   renew_after_boot "this run booted it, which ends its sign-in"
 fi
 
@@ -1081,8 +1091,9 @@ if [ -n "$send" ]; then
   read_icloud
   # Signed in to Settings with CloudKit refusing and nothing asking is the sign-in a restart of
   # the device ended (docs/simulator.md, *A lapse*), which is every boot of a device this script
-  # shut down: the run renews it, once, and launches again.
-  if [ "$icloud" = "account temporarily unavailable" ]; then
+  # shut down: the run renews it, once, and launches again. A run that renewed after its own boot
+  # has had its once, and fails naming the command.
+  if [ "$icloud" = "account temporarily unavailable" ] && [ "$renewed" = no ]; then
     stop_launch
     renew_sign_in "CloudKit answered account temporarily unavailable"
     waited=0
@@ -1095,7 +1106,7 @@ if [ -n "$send" ]; then
     # Signed in to Settings with CloudKit refusing and nothing asking: a sign-in the device's last
     # restart ended, which only signing out and in again mends (docs/simulator.md, *A lapse*).
     "account temporarily unavailable") fail "the simulator $udid is signed in to Settings but CloudKit refuses its account (account temporarily unavailable): its sign-in has ended (a restart of the simulator ends it with no prompt; a change of the account's password ends it with an Apple Account Verification alert, and dismissing that does not mend it). Sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
-    *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in" ;;
+    *) fail "the simulator $udid's iCloud account did not answer CloudKit ($icloud), which is how a lapsed sign-in shows (a network fault shows so too); sign it out and in again with: DEVICE=$udid scripts/simulator-run.sh --sign-in --renew" ;;
   esac
   wait_for done "the turn"
 fi

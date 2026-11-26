@@ -217,14 +217,21 @@ final class SimulatorSignInTests: XCTestCase {
                 answer.tap()
                 continue
             }
-            // Signed out, Settings goes back to its list, where the cell offers a sign-in.
-            if accountCell.exists, accountCell.label.hasPrefix("Apple Account, Sign in") {
+            // Signed out, Settings goes back to its list, where the cell offers a sign-in. The cell
+            // can offer one for a moment while "Signing out…" still stands, so the offer is taken
+            // only once it has held for three seconds with nothing signing out.
+            if offersSignIn(accountCell), !screenWords().contains(where: { $0.hasPrefix("Signing out") }),
+               { sleep(3); return offersSignIn(accountCell) && !screenWords().contains(where: { $0.hasPrefix("Signing out") }) }() {
                 snap("signed-out")
                 print("[sign-in] signed out")
                 return nil
             }
         }
         return "Settings did not offer a sign-in within 120 s of Sign Out"
+    }
+
+    private func offersSignIn(_ cell: XCUIElement) -> Bool {
+        cell.exists && cell.label.hasPrefix("Apple Account, Sign in")
     }
 
     /// Whether the account's own page, opened from its cell, names this account.
@@ -291,14 +298,32 @@ final class SimulatorSignInTests: XCTestCase {
 
     /// Every static text the sign-in shows, and Settings' and SpringBoard's alerts'. Settings' own
     /// list stays in the hierarchy under the sheet, and its rows ("Face ID & Passcode") are not
-    /// the sign-in's words.
+    /// the sign-in's words. Each app is read in one snapshot (`snapshot()`), whose failure is an
+    /// error, where a query enumerated element by element fails the test when the screen changes
+    /// between its count and its reads (the screens a sign-out passes through do); a screen that
+    /// will not hold still for three tries reads as no words.
     private func screenWords() -> [String] {
-        let list = Set(settings.collectionViews["com.apple.settings.sidebar.collectionView"]
-            .staticTexts.allElementsBoundByIndex.map(\.label))
-        var words = settings.staticTexts.allElementsBoundByIndex.map(\.label).filter { !list.contains($0) }
-        words += settings.alerts.allElementsBoundByIndex.map(\.label)
-        words += springboard.alerts.allElementsBoundByIndex.flatMap { [$0.label] + $0.staticTexts.allElementsBoundByIndex.map(\.label) }
-        return words
+        words(of: settings, skipping: "com.apple.settings.sidebar.collectionView") + words(of: springboard, alertsOnly: true)
+    }
+
+    private func words(of app: XCUIApplication, skipping list: String? = nil, alertsOnly: Bool = false) -> [String] {
+        for attempt in 1...3 {
+            if let root = try? app.snapshot() {
+                var found: [String] = []
+                func walk(_ node: XCUIElementSnapshot, inAlert: Bool) {
+                    if let list, node.identifier == list { return }
+                    let alert = inAlert || node.elementType == .alert
+                    if node.elementType == .alert || (node.elementType == .staticText && (alert || !alertsOnly)) {
+                        found.append(node.label)
+                    }
+                    node.children.forEach { walk($0, inAlert: alert) }
+                }
+                walk(root, inAlert: false)
+                return found
+            }
+            if attempt < 3 { sleep(1) }
+        }
+        return []
     }
 
     private func snap(_ name: String) {
