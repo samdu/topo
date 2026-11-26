@@ -10,8 +10,8 @@ import XCTest
 /// glide, through it to its far side from where it is going, and no frame of him over it after
 /// that glide; and a turn that lands on him still, with room above and below it, sends him below.
 final class MascotCrossingTests: XCTestCase {
-    /// The default look's roam: a scale of 1, a clearance of 8, 40 points a second and ten times
-    /// that in a hurry, a settle of 0.6 s, a twenty-fourth of a second a frame.
+    /// The default look's roam: a scale of 1, a clearance of 8, strokes of 93 points at the cruise
+    /// and 1.7 times its pace in a hurry, a settle of 0.6 s.
     static let settings = MascotRoam.Settings(Look.Mascot(), reduceMotion: false)
 
     struct Trace: Decodable {
@@ -71,23 +71,23 @@ final class MascotCrossingTests: XCTestCase {
             if let next = event.field {
                 roam.observe(next, at: event.t)
                 field = next
-                continue
+            } else {
+                roam.advance(to: event.t)
             }
-            roam.advance(to: event.t)
-            guard field != nil else { continue }
+            guard event.field == nil, field != nil else { continue }
             // He stood somewhere when the recording opened, and a crossing is never a reason to
             // stand nowhere.
             let picture = try XCTUnwrap(roam.picture, "t \(event.t): he stands nowhere", file: file, line: line)
-            standingCovered = roam.covered && !roam.walking ? standingCovered + 1 : 0
+            standingCovered = roam.covered && !roam.swimming ? standingCovered + 1 : 0
             XCTAssertLessThanOrEqual(standingCovered, 1, "t \(event.t): caught under text at \(picture)", file: file, line: line)
-            if gliding, !roam.walking {
+            if gliding, !roam.swimming {
                 XCTAssertFalse(roam.covered, "t \(event.t): a glide ended under text at \(picture)", file: file, line: line)
             }
-            gliding = roam.walking
+            gliding = roam.swimming
         }
         XCTAssertEqual(roam.moves, glides, "\(name): one glide a crossing", file: file, line: line)
         XCTAssertFalse(roam.covered, "\(name): he ended under text", file: file, line: line)
-        XCTAssertFalse(roam.walking, "\(name): he never arrived", file: file, line: line)
+        XCTAssertFalse(roam.swimming, "\(name): he never arrived", file: file, line: line)
         return (roam, try XCTUnwrap(field, file: file, line: line))
     }
 
@@ -114,15 +114,27 @@ final class MascotCrossingTests: XCTestCase {
     }
 
     /// The transcript dragged down, a person's bubble descending onto him from above, and let go,
-    /// so it springs back up past him: each way is one glide through the bubble to the side it
-    /// came from — over it on the way down, under it on the way back — and never caught.
-    func testADescendingPersonsTurnAndItsSpringBackAreAHopEach() throws {
-        let (roam, field) = try assertCrossings("crossing-down", glides: 2)
-        // The spring-back rose past him last, so he ends under it.
+    /// so it springs back up: one swim through the bubble, over it, and never caught. The swim is
+    /// still under way when it springs back, and where it ends is carried up with the words, so
+    /// the bubble never passes him again and he ends above it.
+    func testADescendingPersonsTurnAndItsSpringBackAreOneSwimOverIt() throws {
+        let (roam, field) = try assertCrossings("crossing-down", glides: 1)
         let picture = try XCTUnwrap(roam.picture)
-        let above = try XCTUnwrap(Self.bubbles(in: field).filter { $0.maxY <= picture.minY }.max { $0.maxY < $1.maxY },
-                                  "no person's turn above him")
-        XCTAssertGreaterThanOrEqual(picture.minY, above.maxY + Self.settings.clearance - MascotRoost.epsilon)
+        // The bubble that descended is the nearest above him as the recording opens; the bubbles
+        // scroll together, so it keeps its place among them, and he ends above it, not merely
+        // above some bubble further down.
+        let recording = try trace("crossing-down")
+        let first = try XCTUnwrap(recording.events.compactMap(\.field).first)
+        func bubbles(_ field: MascotField) -> [CGRect] {
+            field.obstacles.filter { $0.width > 300 && abs($0.height - 167) < 2 }.sorted { $0.minY < $1.minY }
+        }
+        let opening = bubbles(first), closing = bubbles(field)
+        XCTAssertEqual(opening.count, closing.count, "the recording's bubbles are not the same ones at its end")
+        let rank = try XCTUnwrap(opening.lastIndex { $0.maxY <= recording.standing.y + MascotRoost.epsilon },
+                                 "no person's turn above him as the recording opens")
+        let descended = closing[rank]
+        XCTAssertLessThanOrEqual(picture.maxY + Self.settings.clearance, descended.minY + MascotRoost.epsilon,
+                                 "he did not end above the bubble that descended on him, \(descended)")
         XCTAssertFalse(Self.bubbles(in: field).contains { $0.intersects(picture) }, "he ended over a person's turn")
     }
 
@@ -133,7 +145,7 @@ final class MascotCrossingTests: XCTestCase {
                                      file: StaticString = #filePath, line: UInt = #line) throws {
         var field: MascotField?
         var scrolled: CGFloat = 0
-        var last: (picture: CGRect, walking: Bool)?
+        var last: (picture: CGRect, swimming: Bool)?
         for event in events {
             if let next = event.field {
                 if let field { scrolled += next.drift(since: field) }
@@ -146,12 +158,12 @@ final class MascotCrossingTests: XCTestCase {
             let picture = try XCTUnwrap(roam.picture, "t \(event.t): he stands nowhere", file: file, line: line)
             let room = field.room(Self.settings.reach).insetBy(dx: -MascotRoost.epsilon, dy: -MascotRoost.epsilon)
             XCTAssertTrue(room.contains(picture), "t \(event.t): \(picture) left his room \(room)", file: file, line: line)
-            if let last, !last.walking, !roam.walking {
+            if let last, !last.swimming, !roam.swimming {
                 XCTAssertLessThanOrEqual(abs(picture.minY - last.picture.minY), abs(scrolled) + MascotRoost.epsilon,
                                          "t \(event.t): placed from \(last.picture.minY) to \(picture.minY) with no glide",
                                          file: file, line: line)
             }
-            last = (picture, roam.walking)
+            last = (picture, roam.swimming)
             scrolled = 0
         }
     }
@@ -219,13 +231,13 @@ final class MascotCrossingTests: XCTestCase {
             index += 1
             time += frame
             roam.advance(to: time)
-            standingCovered = roam.covered && !roam.walking ? standingCovered + 1 : 0
+            standingCovered = roam.covered && !roam.swimming ? standingCovered + 1 : 0
             XCTAssertLessThanOrEqual(standingCovered, 1, "t \(time): caught under text at \(roam.picture ?? .null)",
                                      file: file, line: line)
-            if gliding, !roam.walking {
+            if gliding, !roam.swimming {
                 XCTAssertFalse(roam.covered, "t \(time): a glide ended under text", file: file, line: line)
             }
-            gliding = roam.walking
+            gliding = roam.swimming
         }
         return time
     }
@@ -303,11 +315,14 @@ final class MascotCrossingTests: XCTestCase {
         let twin = CGRect(x: 19, y: 20, width: 367, height: 60)
         var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         roam.observe(Self.field([twin, CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
-        roam.advance(to: 1.0 / 30)
-        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
+        var time = 1.0 / 30
+        roam.advance(to: time)
+        // The turn lands on him: he balls up, and `scrunchMin` in he shoots.
+        while roam.move == nil, time < 1 { time += 1.0 / 30; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no swim")
         for step in 1...5 {
             let bubble = CGRect(x: 19, y: 300 + CGFloat(step), width: 367, height: 60)
-            roam.observe(Self.field([twin, bubble]), at: 1.0 / 30)
+            roam.observe(Self.field([twin, bubble]), at: time)
             XCTAssertEqual(try XCTUnwrap(roam.move).to.y, glide.to.y + CGFloat(step), accuracy: 0.001,
                            "step \(step): the destination did not move with the bubble")
         }
@@ -319,11 +334,14 @@ final class MascotCrossingTests: XCTestCase {
     func testATenthOfAPointAGeometryAddsUp() throws {
         var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         roam.observe(Self.field(Self.lines(0) + [CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
-        roam.advance(to: 1.0 / 30)
-        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
+        var time = 1.0 / 30
+        roam.advance(to: time)
+        // The turn lands on him: he balls up, and `scrunchMin` in he shoots.
+        while roam.move == nil, time < 1 { time += 1.0 / 30; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no swim")
         for step in 1...100 {
             let d = CGFloat(step) / 10
-            roam.observe(Self.field(Self.lines(d) + [CGRect(x: 19, y: 300 + d, width: 367, height: 60)]), at: 1.0 / 30)
+            roam.observe(Self.field(Self.lines(d) + [CGRect(x: 19, y: 300 + d, width: 367, height: 60)]), at: time)
         }
         XCTAssertEqual(try XCTUnwrap(roam.move).to.y, glide.to.y + 10, accuracy: 0.01)
         XCTAssertEqual(roam.moves, 1, "the glide was restarted")
@@ -336,29 +354,43 @@ final class MascotCrossingTests: XCTestCase {
         XCTAssertEqual(b.drift(since: a), 0)
     }
 
-    /// A glide carried on to a roost within his clearance of where it was going is timed from
-    /// where he is, so no frame of it moves him further than a frame of the glide's pace.
-    func testACarriedGlideIsTimedFromWhereHeIs() throws {
+    /// A swim carried on to a roost within his clearance of where it was going is bent from where
+    /// he is: the geometry moves him nowhere, and the next frame moves him about as far as a frame
+    /// of the swim he was on would have.
+    func testACarriedSwimIsBentFromWhereHeIs() throws {
         var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         let bubble = CGRect(x: 19, y: 300, width: 367, height: 60)
         roam.observe(Self.field([bubble]), at: 0)
         var time = 1.0 / 30
         roam.advance(to: time)
-        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
-        // Most of the way along, the turn grows a few points taller, into where the glide ends.
-        while let move = roam.move, move.elapsed < move.duration * 0.8 { time += 1.0 / 30; roam.advance(to: time) }
+        while roam.move == nil, time < 1 { time += 1.0 / 30; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no swim")
+        // Most of the way through its strokes, short of the coast after them, the turn grows a few
+        // points taller, into where the swim ends.
+        while let move = roam.move, move.elapsed < Double(move.swim.strokes) * move.swim.strokeLength * 0.8 {
+            time += 1.0 / 30
+            roam.advance(to: time)
+        }
         let before = try XCTUnwrap(roam.picture)
+        let was = try XCTUnwrap(roam.move)
         roam.observe(Self.field([CGRect(x: bubble.minX, y: bubble.minY, width: bubble.width, height: bubble.height + 5)]),
                      at: time)
-        let carried = try XCTUnwrap(roam.move, "the glide was not carried on")
+        let carried = try XCTUnwrap(roam.move, "the swim was not carried on")
         XCTAssertNotEqual(carried.to, glide.to, "nothing moved where it ends")
-        XCTAssertEqual(roam.moves, 1, "carrying the glide on counted another")
-        XCTAssertEqual(carried.from, before.origin, "the carried glide is not timed from where he is")
+        XCTAssertEqual(roam.moves, 1, "carrying the swim on counted another")
+        XCTAssertEqual(carried.elapsed, was.elapsed, "the carried swim began its stroke again")
+        XCTAssertEqual(carried.point.x, before.minX, accuracy: 1e-6, "the carried swim moved him")
+        XCTAssertEqual(carried.point.y, before.minY, accuracy: 1e-6, "the carried swim moved him")
         time += 1.0 / 30
         roam.advance(to: time)
         let after = try XCTUnwrap(roam.picture)
+        let stroke = hypot(was.at(was.elapsed + 1.0 / 30).x - was.point.x, was.at(was.elapsed + 1.0 / 30).y - was.point.y)
+        // The five points more the swim now goes are spread over the rest of its way: the frame
+        // moves him its share of them beside the stroke's own, and nothing more.
+        let f = was.swim.fraction(at: was.elapsed), next = was.swim.fraction(at: was.elapsed + 1.0 / 30)
+        let share = 5 * CGFloat((next - f) / (1 - f))
         XCTAssertLessThanOrEqual(hypot(after.minX - before.minX, after.minY - before.minY),
-                                 Self.settings.speed / 30 + MascotRoost.epsilon, "the carried glide jumped")
+                                 stroke * 1.5 + share + MascotRoost.epsilon, "the carried swim jumped")
     }
 
     /// The words' move between two geometries is what their obstacles moved, and a line that

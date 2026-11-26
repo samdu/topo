@@ -5,9 +5,10 @@ import XCTest
 
 @testable import Topo
 
-/// His frames come at the look's rate while he does anything and at the rest's once he has
-/// rested: a turn, a glide or a finger on him brings the look's rate back at once, and a rest
-/// goes on across his being hidden, since the clock it is measured on stops with the link.
+/// His frames come at one of four rates: the swim's while he swims or is balled, the work's while
+/// he wears a turn's pose, the look's for the idle cycle, a sign and a finger on him, and the
+/// rest's once he has rested. Each comes back on the frame it is seen, and a rest goes on across
+/// his being hidden, since the clock it is measured on stops with the link.
 @MainActor
 final class MascotCadenceTests: XCTestCase {
     private let seen = MascotDriver.Conditions(active: true, onScreen: true, opacity: 1, covered: false,
@@ -45,38 +46,42 @@ final class MascotCadenceTests: XCTestCase {
     /// What a frame lasts now, and what the link asks the display for, which is the saving.
     private func rate(_ canvas: MascotCanvas) -> (cadence: Double, link: Float?) { (canvas.cadence, canvas.frameRate) }
 
-    /// The sheet's rate reaches the link on the frame it is seen, on a link that already exists,
-    /// and the rest's rate is the look's whatever the sheet says.
-    func testTheSheetsRateReachesTheLinkAndTheRestsRateIsTheLooks() throws {
+    /// Each of the look's rates reaches the link on the frame it is seen, on a link that already
+    /// exists: a turn's pose at the work's, idle at the look's, and rested at the rest's.
+    func testEachOfTheLooksRatesReachesTheLink() throws {
         let window = try stageWindow()
         defer { window.isHidden = true }
         let canvas = canvas(in: window)
         var open = MascotState(model: "claude-sonnet-5")
         open.turnOpen = true
-        for rate in [20.0, 30.0, 24.0] {
+        for rate in [20.0, 30.0, 40.0] {
             canvas.apply(input: open.input, field: MascotPlacementTests.field(),
-                         settings: MascotPlacementTests.settings(.roam), interval: 1 / rate,
-                         restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
+                         settings: MascotPlacementTests.settings(.roam), interval: look.frameInterval,
+                         workInterval: 1 / rate, restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
             XCTAssertEqual(canvas.cadence, 1 / rate, "\(rate)")
             XCTAssertEqual(canvas.frameRate, Float(rate), "\(rate) did not reach the link")
         }
         open.turnOpen = false
-        canvas.apply(input: open.input, field: MascotPlacementTests.field(),
-                     settings: MascotPlacementTests.settings(.roam), interval: 1 / 30,
-                     restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
+        for rate in [20.0, 24.0, 30.0] {
+            canvas.apply(input: open.input, field: MascotPlacementTests.field(),
+                         settings: MascotPlacementTests.settings(.roam), interval: 1 / rate,
+                         restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
+            XCTAssertEqual(canvas.cadence, 1 / rate, "idle at \(rate)")
+            XCTAssertEqual(canvas.frameRate, Float(rate), "idle at \(rate) did not reach the link")
+        }
         for _ in 0..<Int(((look.restAfter + 2) * 30).rounded(.up)) { canvas.step(1 / 30) }
         XCTAssertEqual(canvas.cadence, look.restInterval, "rested at 30, his frames come at the rest's rate")
         XCTAssertEqual(canvas.frameRate, 12)
 
-        // A rest is never faster than work: a look whose rest is shorter than its frame rests at
-        // the frame.
+        // A rest is never faster than the idle cycle: a look whose rest is shorter than its frame
+        // rests at the frame.
         canvas.apply(input: open.input, field: MascotPlacementTests.field(),
                      settings: MascotPlacementTests.settings(.roam), interval: 0.05,
                      restInterval: 1 / 120, restAfter: look.restAfter, conditions: seen)
-        XCTAssertEqual(canvas.cadence, 0.05, "rested, his frames came faster than at work")
+        XCTAssertEqual(canvas.cadence, 0.05, "rested, his frames came faster than idle")
         XCTAssertEqual(canvas.frameRate, 20)
         for _ in 0..<Int(((look.restAfter + 2) * 20).rounded(.up)) { canvas.step(0.05) }
-        XCTAssertEqual(canvas.cadence, 0.05, "rested longer, his frames came faster than at work")
+        XCTAssertEqual(canvas.cadence, 0.05, "rested longer, his frames came faster than idle")
         XCTAssertEqual(canvas.frameRate, 20)
     }
 
@@ -95,14 +100,14 @@ final class MascotCadenceTests: XCTestCase {
         XCTAssertEqual(canvas.cadence, look.restInterval, "rested, his frames come at the rest's rate")
         XCTAssertEqual(canvas.frameRate, 12, "the rest's rate did not reach the link")
 
-        // A turn opening is the thinking pose: the look's rate on the frame it is seen.
+        // A turn opening is the thinking pose: the work's rate on the frame it is seen.
         var open = idle
         open.turnOpen = true
         tell(canvas, open)
-        XCTAssertEqual(canvas.cadence, look.frameInterval, "a turn in flight is not rest")
-        XCTAssertEqual(canvas.frameRate, 24)
+        XCTAssertEqual(canvas.cadence, look.workInterval, "a turn in flight is not at the work's rate")
+        XCTAssertEqual(canvas.frameRate, 30)
         run(canvas, seconds: look.restAfter + 2)
-        XCTAssertEqual(canvas.cadence, look.frameInterval, "the turn is still open")
+        XCTAssertEqual(canvas.cadence, look.workInterval, "the turn is still open")
 
         // The turn ends: the rest starts afresh and takes its `restAfter` again, to the frame: a
         // frame short of four seconds he is at the look's rate, and a frame past it at the rest's.
@@ -116,7 +121,7 @@ final class MascotCadenceTests: XCTestCase {
         XCTAssertEqual(canvas.cadence, look.restInterval, "a frame past four seconds he is not rested")
         XCTAssertEqual(canvas.frameRate, 12)
 
-        // A sign held up is not rest: the look's rate on the frame it is seen.
+        // A sign held up is not rest, and not work: the look's rate on the frame it is seen.
         var signed = idle
         signed.sign = "Hello"
         tell(canvas, signed)
@@ -182,7 +187,8 @@ final class MascotCadenceTests: XCTestCase {
         run(canvas, seconds: 4 * look.frameInterval)
         XCTAssertEqual(canvas.cadence, look.restInterval)
 
-        // A new place is a glide, which is the walk: the look's rate while it lasts.
+        // A new place is a swim: the swim's rate while it lasts, and the look's and then the
+        // rest's after it, so a sixtieth never outlives the swim.
         let fresh = self.canvas(in: window)
         tell(fresh, idle)
         run(fresh, seconds: look.restAfter + 4)
@@ -190,16 +196,32 @@ final class MascotCadenceTests: XCTestCase {
         fresh.apply(input: idle.input, field: MascotPlacementTests.field(),
                     settings: MascotPlacementTests.settings(.glass), interval: look.frameInterval,
                     restInterval: look.restInterval, restAfter: look.restAfter, conditions: seen)
-        var glided = false
-        for _ in 0..<Int(3 / look.frameInterval) {
-            fresh.step(look.frameInterval)
-            if fresh.roam?.walking == true {
-                glided = true
-                XCTAssertEqual(fresh.cadence, look.frameInterval, "a glide is not rest")
-                XCTAssertEqual(fresh.frameRate, 24)
+        var swam = false
+        for _ in 0..<Int(3 / look.swimInterval) {
+            fresh.step(fresh.cadence)
+            if fresh.roam?.swimming == true {
+                swam = true
+                XCTAssertEqual(fresh.cadence, look.swimInterval, "a swim is not at the swim's rate")
+                XCTAssertEqual(fresh.frameRate, 60)
                 break
             }
         }
-        XCTAssertTrue(glided, "the new place did not move him within three seconds")
+        XCTAssertTrue(swam, "the new place did not move him within three seconds")
+        var time = 0.0
+        while fresh.roam?.swimming == true, time < 10 { time += fresh.cadence; fresh.step(fresh.cadence) }
+        XCTAssertEqual(fresh.roam?.swimming, false, "the swim never ended")
+        // Righting himself after it is the swim's rate too, and upright he is back at the look's.
+        while fresh.lean.angle != 0, time < 12 {
+            XCTAssertEqual(fresh.cadence, look.swimInterval, "righting himself is not at the swim's rate")
+            time += fresh.cadence
+            fresh.step(fresh.cadence)
+        }
+        fresh.step(fresh.cadence)
+        XCTAssertEqual(fresh.cadence, look.frameInterval, "arrived and upright, he is not back at the look's rate")
+        XCTAssertEqual(fresh.frameRate, 24)
+        run(fresh, seconds: look.restAfter + 1)
+        XCTAssertEqual(fresh.cadence, look.restInterval, "arrived, he never rested")
+        XCTAssertEqual(fresh.lean.angle, 0, "rested, he is still leaning")
+        XCTAssertFalse(fresh.isTicking && fresh.roam?.needsTime == true, "the clock still asked for at rest")
     }
 }

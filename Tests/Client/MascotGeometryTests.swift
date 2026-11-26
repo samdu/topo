@@ -308,7 +308,7 @@ final class MascotGeometryTests: XCTestCase {
             }
             XCTAssertTrue(MascotRoost.admits(field, frame: choice.frame, clearance: 0, reach: reach), label)
 
-            var roam = MascotRoam(MascotRoam.Settings(size: size, clearance: 32, reach: reach, speed: 40, settle: 0.6))
+            var roam = MascotRoam(MascotRoam.Settings(size: size, clearance: 32, reach: reach, settle: 0.6))
             roam.observe(field, at: 0)
             var time = 0.0
             while roam.needsTime, time < 10 { time += 1.0 / 30; roam.advance(to: time) }
@@ -619,6 +619,119 @@ final class MascotGeometryTests: XCTestCase {
             print("[topo-debug] mascot reach: \(line)")
             XCTContext.runActivity(named: line) { _ in }
         }
+    }
+
+    /// Every frame of a swim is drawn inside `MascotSprite.reach` once the canvas has turned it by
+    /// the lean about `MascotSprite.pivot`: on every head, load band and facing, from idle and from
+    /// a working pose, eight ways round the clock, as the canvas runs it at a sixtieth — the ball
+    /// with nowhere yet to go, the shot and the glide with his arms trailing as the lean turns to
+    /// the way he goes, a kick a third of a turn off it halfway there, and the arrival back into
+    /// the pose he swam from while the lean rights itself. A pixel is its whole square, turned.
+    func testEverySwimFrameIsDrawnInsideTheReach() {
+        let reach = MascotSprite.reach
+        let pivot = CGPoint(x: MascotSprite.pivot.x * CGFloat(Topo.width), y: MascotSprite.pivot.y * CGFloat(Topo.height))
+        XCTAssertEqual(pivot, CGPoint(x: 80, y: 110))
+        let runs = Self.each(Run.all) { run -> (extent: CGRect, frames: Int) in
+            var random = Mulberry32(seed: UInt32(run.m * 4 + run.b + 1))
+            let engine = Topo(random: { random.next() })
+            var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+            var x0 = CGFloat.infinity, y0 = CGFloat.infinity, x1 = -CGFloat.infinity, y1 = -CGFloat.infinity
+            var frames = 0
+            let dt = 1.0 / 60
+            var lean = MascotLean()
+            var lastTrail: Double?
+            func frame(_ activity: String, course: CGVector?, righting: Bool = false) {
+                lean.step(dt, heading: course)
+                if righting, let t = lastTrail { lastTrail = MascotLean.righting(t, dt) }
+                let trail = course.map { lean.trail($0) } ?? (righting ? lastTrail : nil)
+                if course != nil { lastTrail = trail }
+                engine.update(dt, TopoInput(tokens: run.tokens, level: run.level, activity: activity, corner: 0,
+                                            facing: run.facing.rawValue, trail: trail))
+                engine.draw(&rgba)
+                frames += 1
+                let c = cos(lean.angle), s = sin(lean.angle)
+                rgba.withUnsafeBufferPointer { buffer in
+                    let alpha = buffer.baseAddress! + 3
+                    var y = 0
+                    while y < Topo.height {
+                        let row = alpha + y * Topo.width * 4
+                        var left = 0
+                        while left < Topo.width, row[left * 4] == 0 { left += 1 }
+                        if left < Topo.width {
+                            var right = Topo.width - 1
+                            while row[right * 4] == 0 { right -= 1 }
+                            for px in [left, right] {
+                                for (cx, cy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                                    let dx = Double(px) + cx - Double(pivot.x), dy = Double(y) + cy - Double(pivot.y)
+                                    let tx = CGFloat(Double(pivot.x) + dx * c - dy * s), ty = CGFloat(Double(pivot.y) + dx * s + dy * c)
+                                    x0 = min(x0, tx); x1 = max(x1, tx); y0 = min(y0, ty); y1 = max(y1, ty)
+                                }
+                            }
+                        }
+                        y += 1
+                    }
+                }
+            }
+            for from in ["idle", "writing", "building", "searching", "thinking", "calendar"] {
+                for way in 0..<8 {
+                    let angle = Double(way) * .pi / 4
+                    let heading = CGVector(dx: 300 * cos(angle), dy: 300 * sin(angle))
+                    // Settled into the pose he swims from, and upright.
+                    for _ in 0..<60 { frame(from, course: nil) }
+                    // From the ball, held as long as the roam holds it before the shot, then from
+                    // the pose itself, a placed swim turning him at once.
+                    for scrunched in [true, false] {
+                    if scrunched {
+                        for _ in 0...Int((MascotRoam.scrunchMin / dt).rounded(.up)) { frame(MascotSwim.Phase.open.rawValue, course: nil) }
+                    }
+                    // The shot, hurried; halfway there a kick a third of a turn off.
+                    var swim = MascotSwim(from: .zero, to: CGPoint(x: heading.dx, y: heading.dy), stride: 93, pace: 1.7,
+                                          scrunched: scrunched)
+                    let kickAt = swim.elapsed + swim.duration / 2
+                    // Without the ball, bent inside its scrunch a quarter turn round.
+                    let bendAt = scrunched ? -1 : 0.5 * MascotSwim.open / swim.pace
+                    var kicked = false, bent = false
+                    while !swim.done {
+                        if !bent, bendAt >= 0, swim.elapsed >= bendAt {
+                            bent = true
+                            let here = swim.point, turn = angle + .pi / 2
+                            swim.bend(from: here, to: CGPoint(x: here.x + 300 * cos(turn), y: here.y + 300 * sin(turn)))
+                        }
+                        if !kicked, swim.elapsed >= kickAt {
+                            kicked = true
+                            let here = swim.point, turn = angle + 2 * .pi / 3
+                            swim = MascotSwim(from: here, to: CGPoint(x: here.x + 200 * cos(turn), y: here.y + 200 * sin(turn)),
+                                              stride: 93, pace: 1.7, scrunched: true)
+                        }
+                        frame(swim.phase.rawValue, course: swim.leads ? swim.heading : nil)
+                        swim.elapsed += dt
+                    }
+                    // Arrived, he rights himself in the glide, his arms coming in to straight behind
+                    // him, as the canvas has him (`MascotCanvas.sync`, `step`), and is upright
+                    // before the pose he swam from.
+                    var righting = 0
+                    while lean.angle != 0 {
+                        frame(MascotSwim.Phase.trail.rawValue, course: nil, righting: true)
+                        righting += 1
+                        XCTAssertLessThan(righting, 120, "\(run.label): never upright")
+                        if righting >= 120 { break }
+                    }
+                    for _ in 0..<60 { frame(from, course: nil) }
+                    }
+                }
+            }
+            return (CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0), frames)
+        }
+        var all = CGRect.null
+        for (run, result) in zip(Run.all, runs) {
+            XCTAssertGreaterThan(result.frames, 1000, run.label)
+            XCTAssertTrue(reach.insetBy(dx: -1e-9, dy: -1e-9).contains(result.extent),
+                          "\(run.label): a swim drawn in \(result.extent), outside the reach \(reach)")
+            all = all.union(result.extent)
+        }
+        let line = String(format: "swim: drawn in x %.1f–%.1f, y %.1f–%.1f, in art pixels", all.minX, all.maxX, all.minY, all.maxY)
+        print("[topo-debug] mascot reach: \(line)")
+        XCTContext.runActivity(named: line) { _ in }
     }
 
     /// The union of the pixels drawn across frames of the engine's picture.
@@ -1277,7 +1390,7 @@ final class MascotGeometryTests: XCTestCase {
         while across.needsTime, time < 60 {
             time += 1.0 / 30
             across.advance(to: time)
-            if across.walking, across.facing == .left { turnedMidGlide = true }
+            if across.swimming, across.facing == .left { turnedMidGlide = true }
         }
         XCTAssertTrue(turnedMidGlide, "the facing waited for the glide to end")
         XCTAssertEqual(across.facing, .left)
