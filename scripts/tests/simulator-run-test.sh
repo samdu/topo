@@ -263,6 +263,8 @@ case " $* " in *" TopoSimulatorSignIn "*)
   [ -z "${FAKE_SIGNIN_SAYS:-}" ] || echo "$FAKE_SIGNIN_SAYS"
   # A sign-in still in Settings when the case signals the run.
   [ -z "${FAKE_SIGNIN_HANGS:-}" ] || { touch "$FAKE_SIGNIN_HANGS"; exec /bin/sleep 30; }
+  # A sign-in that leaves a process of its own behind, as a build service outliving xcodebuild would.
+  [ -z "${FAKE_SIGNIN_LEAVES:-}" ] || { /bin/sleep 20 </dev/null >/dev/null 2>&1 & }
   if [ -n "${FAKE_SIGNIN_STOPS:-}" ]; then echo "[sign-in] stopped: Settings asks for a verification code"; echo "** TEST FAILED **"; exit 65; fi
   [ -n "${TEST_RUNNER_TOPO_SIGNIN_PORT:-}" ] || exit 0  # a resume serves nothing to ask
   /usr/bin/python3 -c '
@@ -1041,11 +1043,32 @@ sim_case sim-sign-in-clears-the-stop  pass no "" 1 FAKE_LAUNCH=silent -- --sign-
 
 # A renewal waits for another run's sign-in on the device and, when that one passed, types nothing.
 rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped
-lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "/bin/sleep 3; touch '$TOPO_SIM_STATE/FAKE-UDID.signed-in'" &
+# The holder lets go once the run says it is waiting, and not by the clock (a minute at most).
+rm -f "$work/sim-renewal-waits-its-turn.out"
+lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "for _ in \$(seq 600); do grep -q 'another run is signing' '$work/sim-renewal-waits-its-turn.out' 2>/dev/null && break; /bin/sleep 0.1; done; touch '$TOPO_SIM_STATE/FAKE-UDID.signed-in'" &
 holder=$!
-/bin/sleep 0.5
+for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
 sim_case sim-renewal-waits-its-turn   pass yes "the run this one waited for renewed it" 0 FAKE_LAUNCH=unavailable-then-answered -- --send hello
 wait "$holder"
+# What a sign-in leaves running holds no sign-in lock: the next renewal finds it free.
+rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+sim_case sim-sign-in-lock-not-inherited pass no "" 1 FAKE_LAUNCH=silent FAKE_SIGNIN_LEAVES=1 -- --sign-in
+if lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true; then
+  echo "ok   sim-sign-in-lock-free-after: a process the sign-in left behind does not hold the lock"
+else
+  echo "FAIL sim-sign-in-lock-free-after: the sign-in lock is still held after the run"; failures=$((failures + 1))
+fi
+# A sign-in that finds the device signed in already types nothing, and so mends no stop.
+echo "stopped earlier" >"$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"; rm -f "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
+FAKE_SIGNIN_SAYS="[sign-in] already signed in as buddy.durose@icloud.com, and nothing asks for the password" \
+  sim_case sim-already-signed-in-mends-nothing pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
+if [ "$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)" = "stopped earlier" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.signed-in" ]; then
+  echo "ok   sim-already-signed-in-keeps-the-stop: the earlier stop stands and no sign-in is recorded"
+else
+  echo "FAIL sim-already-signed-in-keeps-the-stop: stop '$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)', signed-in: $(ls "$TOPO_SIM_STATE")"
+  failures=$((failures + 1))
+fi
+rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
 # A sign-in a signal ends mid-Settings leaves a stop: no shutdown under its screen, no renewal after.
 : >"$work/simctl.calls"; rm -f "$work/signin-hangs"
 PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder FAKE_APPLE_PASSWORD="fake-apple-$$" FAKE_SIGNIN_ENV="$work/hang.env" \

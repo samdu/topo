@@ -1523,8 +1523,9 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(calls.count("ps -axwwo"), 2)
         self.assertNotIn("simctl shutdown", calls)
-        self.assertEqual(self.state_file()["simulators"][janitor.SIGNED_IN_SIMULATOR][:13], datetime.now(timezone.utc).isoformat()[:13],
-                         "a user found under the lock starts the idle time again")
+        started = janitor.parse_time(self.state_file()["simulators"][janitor.SIGNED_IN_SIMULATOR])
+        self.assertLess(abs(datetime.now(timezone.utc) - started), timedelta(minutes=5),
+                        "a user found under the lock starts the idle time again")
 
     def test_a_use_or_a_stop_since_the_first_read_is_seen_under_the_lock(self):
         simstate = os.path.join(self.work, "Library", "Caches", "topo-sim")

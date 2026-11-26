@@ -278,7 +278,7 @@ boot_device() {
   touched=yes
   used_now
   { lockf -s -t 120 7 || { echo "==> another run has held $simstate/mutex for 2 minutes" >&2; return 1; }
-    ! xcrun simctl boot "$udid" 7>&- 2>/dev/null || booted_here=yes
+    ! xcrun simctl boot "$udid" 6>&- 7>&- 2>/dev/null || booted_here=yes
   } 7>"$simstate/mutex"
   xcrun simctl bootstatus "$udid" -b >/dev/null
 }
@@ -403,8 +403,10 @@ running_child() {
 }
 
 # Runs a command as a recorded child and waits for it, returning its status.
+# Descriptor 6 is the sign-in lock (take_sign_in), closed here and in serve_once's listener,
+# since a redirect on the function's call does not reach what the function starts in the background.
 tracked() {
-  "$@" &
+  "$@" 6>&- &
   local pid=$! status=0
   echo "$pid" >>"$pids"
   started_pids="$started_pids $pid"
@@ -445,7 +447,7 @@ while time.monotonic() < deadline:
         if asked == nonce:
             peer.sendall(secret)
             sys.exit(0)
-sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") &
+sys.exit(1)' "$nonce" "$portfile" "$seconds" < <(printf '%s' "${!2}") 6>&- &
   listener=$!
   served_by=$listener
   echo "$listener" >>"$pids"
@@ -679,6 +681,8 @@ sign_in() {
   results="$derived/TopoSimulatorSignIn.xcresult"
   # Recorded before Settings is driven, so a run that ends mid-sign-in, by a signal included,
   # leaves a stop behind: an attempt nobody saw finish is one that may have been refused.
+  local prior
+  prior="$(cat "$stopped" 2>/dev/null || true)"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: begun and not seen to finish; see $results" >"$stopped"
   rm -rf "$results"
   boot_device
@@ -722,7 +726,11 @@ sign_in() {
   else
     echo "==> the sign-in stopped; the '[sign-in] stopped:' line above and $results say where. Type no password by hand before reading why: a refused one tried again locks the account" >&2
   fi
-  if [ "$status" = 0 ]; then
+  if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
+    # Nothing was typed, so nothing is mended: a stop that stood still stands, and no sign-in is
+    # recorded for a run waiting on this one to read as a renewal.
+    if [ -n "$prior" ]; then printf '%s\n' "$prior" >"$stopped"; else rm -f "$stopped"; fi
+  elif [ "$status" = 0 ]; then
     rm -f "$stopped"
     touch "$signedin"
   else
