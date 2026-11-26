@@ -688,6 +688,23 @@ else
   sed 's/^/    | /' "$work/talk-reboot-stopped.out" | grep -vF "$token"; failures=$((failures + 1))
 fi
 rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+# A stop recorded while --talk waits for the lock is read under it, before the reboot's shutdown.
+: >"$work/simctl.calls"; rm -f "$work/talk-reboot-stop-waited.out"
+lockf "$TOPO_SIM_STATE/mutex" sh -c "for _ in \$(seq 600); do grep -q 'rebooting the simulator' '$work/talk-reboot-stop-waited.out' 2>/dev/null && break; /bin/sleep 0.1; done; echo refused >'$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped'" &
+holder=$!
+for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/mutex" true 2>/dev/null || break; /bin/sleep 0.1; done
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN="$token" FAKE_LANE_START=0 FAKE_LAUNCH=silent FAKE_SIMCTL_CALLS="$work/simctl.calls" \
+  FAKE_SIM_BOOTED="Mon Nov  9 09:05:01 2026" FAKE_AUDIO_STARTED="Wed Nov 11 17:10:52 2026" \
+  "$work/root/scripts/simulator-run.sh" --no-build --talk >"$work/talk-reboot-stop-waited.out" 2>&1 </dev/null
+status=$?
+wait "$holder"
+if [ "$status" = 1 ] && ! grep -qx 'shutdown\|boot' "$work/simctl.calls" && grep -q "types no password" "$work/talk-reboot-stop-waited.out"; then
+  echo "ok   talk-reboot-stop-waited: a stop made while the reboot waited for the lock refused it, and the device neither shut down nor booted"
+else
+  echo "FAIL talk-reboot-stop-waited: exit $status, simctl: $(tr '\n' ' ' <"$work/simctl.calls")"
+  sed 's/^/    | /' "$work/talk-reboot-stop-waited.out" | grep -vF "$token"; failures=$((failures + 1))
+fi
+rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
 # A device with no sign-in recorded since its last --erase is not signed in for the first time.
 rm -f "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
 reboot_case talk-never-signed-in     ""                         "boot shutdown"               no
@@ -997,6 +1014,12 @@ sim_case sim-shell-options-keep       pass no "left booted for the runs using it
   "FAKE_PS_LIST=  995     1 /bin/bash -e -o pipefail scripts/simulator-run.sh --send hi" -- --send hello
 sim_case sim-command-string-is-no-run pass yes "" 0 FAKE_LAUNCH=answered \
   "FAKE_PS_LIST=  991     1 /bin/bash -lc cd ~/github/topo && echo scripts/simulator-run.sh" -- --send hello
+sim_case sim-rcfile-run-keeps         pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  990     1 bash --rcfile /tmp/bashrc scripts/simulator-run.sh --send hi" -- --send hello
+sim_case sim-clustered-option-keeps   pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  989     1 /bin/bash -eo pipefail scripts/simulator-run.sh --send hi" -- --send hello
+sim_case sim-env-unset-run-keeps      pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
+  "FAKE_PS_LIST=  988     1 env -u DEVICE bash -- scripts/simulator-run.sh" -- --send hello
 sim_case sim-env-run-keeps            pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
   "FAKE_PS_LIST=  994     1 /usr/bin/env DEVICE=x bash scripts/simulator-run.sh" -- --send hello
 sim_case sim-destination-field-keeps  pass no "left booted for the runs using it" 0 FAKE_LAUNCH=answered \
@@ -1050,6 +1073,21 @@ holder=$!
 for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
 sim_case sim-renewal-waits-its-turn   pass yes "the run this one waited for renewed it" 0 FAKE_LAUNCH=unavailable-then-answered -- --send hello
 wait "$holder"
+# A --sign-in that waited for another run's sign-in types nothing over what that one left.
+for outcome in passed stopped; do
+  rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped "$work/sim-sign-in-waited-$outcome.out"
+  if [ "$outcome" = passed ]; then left="uuidgen >'$TOPO_SIM_STATE/FAKE-UDID.signed-in'"; else left="echo refused >'$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped'"; fi
+  lockf "$TOPO_SIM_STATE/FAKE-UDID.renewing" sh -c "for _ in \$(seq 600); do grep -q 'another run is signing' '$work/sim-sign-in-waited-$outcome.out' 2>/dev/null && break; /bin/sleep 0.1; done; $left" &
+  holder=$!
+  for _ in $(seq 50); do lockf -s -t 0 "$TOPO_SIM_STATE/FAKE-UDID.renewing" true 2>/dev/null || break; /bin/sleep 0.1; done
+  if [ "$outcome" = passed ]; then
+    sim_case sim-sign-in-waited-passed  pass no "this run types nothing" 0 FAKE_LAUNCH=silent -- --sign-in
+  else
+    sim_case sim-sign-in-waited-stopped fail no "Read why it stopped" 0 FAKE_LAUNCH=silent -- --sign-in
+  fi
+  wait "$holder"
+done
+rm -f "$TOPO_SIM_STATE"/FAKE-UDID.sign-in-stopped
 # What a sign-in leaves running holds no sign-in lock: the next renewal finds it free.
 rm -f "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
 sim_case sim-sign-in-lock-not-inherited pass no "" 1 FAKE_LAUNCH=silent FAKE_SIGNIN_LEAVES=1 -- --sign-in
@@ -1060,10 +1098,13 @@ else
 fi
 # A sign-in that finds the device signed in already types nothing, and so mends no stop.
 echo "stopped earlier" >"$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"; rm -f "$TOPO_SIM_STATE/FAKE-UDID.signed-in"
+touch -t "$(date -v-2H +%Y%m%d%H%M)" "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped"
+stop_time="$(stat -f %m "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped")"
 FAKE_SIGNIN_SAYS="[sign-in] already signed in as buddy.durose@icloud.com, and nothing asks for the password" \
   sim_case sim-already-signed-in-mends-nothing pass no "" 1 FAKE_LAUNCH=silent -- --sign-in
-if [ "$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)" = "stopped earlier" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.signed-in" ]; then
-  echo "ok   sim-already-signed-in-keeps-the-stop: the earlier stop stands and no sign-in is recorded"
+if [ "$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)" = "stopped earlier" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.signed-in" ] \
+   && [ "$(stat -f %m "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped")" = "$stop_time" ] && [ ! -e "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped.prior" ]; then
+  echo "ok   sim-already-signed-in-keeps-the-stop: the earlier stop stands, with its time, and no sign-in is recorded"
 else
   echo "FAIL sim-already-signed-in-keeps-the-stop: stop '$(cat "$TOPO_SIM_STATE/FAKE-UDID.sign-in-stopped" 2>/dev/null)', signed-in: $(ls "$TOPO_SIM_STATE")"
   failures=$((failures + 1))

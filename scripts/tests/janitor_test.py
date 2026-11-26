@@ -422,8 +422,12 @@ class Decisions(unittest.TestCase):
                  (9, ["/usr/bin/env", "DEVICE=x", "bash", "/r/topo/scripts/simulator-run.sh"]),
                  (10, ["claude", "scripts/simulator-run.sh", u]),
                  (11, ["bash", "-c", "echo scripts/simulator-run.sh"]),
-                 (12, ["xcodebuild", "test", "-destination", "platform=iOS", f"Simulator,id={u}-2,OS=latest"])]
-        self.assertEqual([int(x.split()[0]) for x in janitor.sim_users(u, procs)], [1, 2, 3, 7, 8, 9])
+                 (12, ["xcodebuild", "test", "-destination", "platform=iOS", f"Simulator,id={u}-2,OS=latest"]),
+                 (13, ["bash", "--rcfile", "/tmp/bashrc", "scripts/simulator-run.sh", "--send", "hi"]),
+                 (14, ["/bin/bash", "-eo", "pipefail", "scripts/simulator-run.sh"]),
+                 (15, ["env", "-u", "DEVICE", "bash", "--", "scripts/simulator-run.sh"]),
+                 (16, ["bash", "--rcfile", "scripts/simulator-run.sh", "other.sh"])]
+        self.assertEqual([int(x.split()[0]) for x in janitor.sim_users(u, procs)], [1, 2, 3, 7, 8, 9, 13, 14, 15])
 
     def test_a_booted_simulator_nothing_uses_is_shut_once_it_has_stood_idle(self):
         u = janitor.SIGNED_IN_SIMULATOR

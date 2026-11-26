@@ -1126,9 +1126,10 @@ SIM_STOP_HOLD = timedelta(minutes=30)   # a stopped sign-in's code screen is kep
 
 def runs_script(argv):
     """Whether argv is simulator-run.sh running: the script as the program, or
-    as the first operand of a shell or env after its options (and env's
-    assignments and shell). A process that only mentions it, a shell's `-c`
-    command string included, is not."""
+    as the first operand of a shell or env after its options (those that take
+    an argument with it: a shell's -o, -O, --rcfile and --init-file, env's -u,
+    -P, -S and -C), env's assignments and shell, and a `--`. A process that
+    only mentions it, a shell's `-c` command string included, is not."""
     prog = os.path.basename(argv[0])
     if prog == "simulator-run.sh":
         return True
@@ -1136,14 +1137,26 @@ def runs_script(argv):
         return False
     rest = iter(argv[1:])
     for a in rest:
-        if a in ("-o", "+o", "-O", "+O"):
-            next(rest, None)
-        elif prog in SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
-            return False   # a command string, not a script
-        elif a.startswith(("-", "+")) or (prog == "env" and "=" in a) or (prog == "env" and os.path.basename(a) in SHELLS):
-            continue
+        if a == "--":
+            return os.path.basename(next(rest, "")) == "simulator-run.sh"
+        if prog == "env":
+            if re.fullmatch(r"-[A-Za-z]*[uPSC]", a):
+                next(rest, None)
+                continue
+            if a.startswith("-") or "=" in a:
+                continue
+            if os.path.basename(a) in SHELLS:
+                prog = os.path.basename(a)
+                continue
         else:
-            return os.path.basename(a) == "simulator-run.sh"
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+                return False   # a command string, not a script
+            if a in ("--rcfile", "--init-file") or re.fullmatch(r"[-+][A-Za-z]*[oO]", a):
+                next(rest, None)
+                continue
+            if a.startswith(("-", "+")):
+                continue
+        return os.path.basename(a) == "simulator-run.sh"
     return False
 
 

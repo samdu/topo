@@ -251,10 +251,16 @@ others_using() {
         prog = base(f[3]); using = (prog == "simulator-run.sh")
         if (!using && (prog ~ /^(ba|z|da)?sh$/ || prog == "env")) {
           for (j = 4; j <= nf; j++) {
-            if (f[j] == "-o" || f[j] == "+o" || f[j] == "-O" || f[j] == "+O") { j++; continue }
-            if (prog != "env" && f[j] ~ /^-[A-Za-z]*c[A-Za-z]*$/) break
-            if (f[j] ~ /^[-+]/ || (prog == "env" && f[j] ~ /=/)) continue
-            if (prog == "env" && base(f[j]) ~ /^(ba|z|da)?sh$/) continue
+            if (f[j] == "--") { j++; using = (j <= nf && base(f[j]) == "simulator-run.sh"); break }
+            if (prog == "env") {
+              if (f[j] ~ /^-[A-Za-z]*[uPSC]$/) { j++; continue }
+              if (f[j] ~ /^-/ || f[j] ~ /=/) continue
+              if (base(f[j]) ~ /^(ba|z|da)?sh$/) { prog = base(f[j]); continue }
+            } else {
+              if (f[j] ~ /^-[A-Za-z]*c[A-Za-z]*$/) break
+              if (f[j] == "--rcfile" || f[j] == "--init-file" || f[j] ~ /^[-+][A-Za-z]*[oO]$/) { j++; continue }
+              if (f[j] ~ /^[-+]/) continue
+            }
             using = (base(f[j]) == "simulator-run.sh"); break
           }
         }
@@ -316,7 +322,7 @@ if [ "$erase" = yes ]; then
   echo "==> $device ($udid)"
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl erase "$udid"
-  rm -f "$signedin" "$stopped"
+  rm -f "$signedin" "$stopped" "$stopped.prior"
   echo "==> erased; the simulator's iCloud account and the app's data are gone"
   exit 0
 fi
@@ -681,8 +687,9 @@ sign_in() {
   results="$derived/TopoSimulatorSignIn.xcresult"
   # Recorded before Settings is driven, so a run that ends mid-sign-in, by a signal included,
   # leaves a stop behind: an attempt nobody saw finish is one that may have been refused.
-  local prior
-  prior="$(cat "$stopped" 2>/dev/null || true)"
+  # A stop standing is kept aside, with its time, for a sign-in that types nothing to put back.
+  rm -f "$stopped.prior"
+  [ ! -e "$stopped" ] || cp -p "$stopped" "$stopped.prior"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: begun and not seen to finish; see $results" >"$stopped"
   rm -rf "$results"
   boot_device
@@ -729,11 +736,12 @@ sign_in() {
   if [ "$status" = 0 ] && grep -q '^\[sign-in\] already signed in' "$runlog"; then
     # Nothing was typed, so nothing is mended: a stop that stood still stands, and no sign-in is
     # recorded for a run waiting on this one to read as a renewal.
-    if [ -n "$prior" ]; then printf '%s\n' "$prior" >"$stopped"; else rm -f "$stopped"; fi
+    if [ -e "$stopped.prior" ]; then mv -f "$stopped.prior" "$stopped"; else rm -f "$stopped"; fi
   elif [ "$status" = 0 ]; then
-    rm -f "$stopped"
-    touch "$signedin"
+    rm -f "$stopped" "$stopped.prior"
+    uuidgen >"$signedin"
   else
+    rm -f "$stopped.prior"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) in $root: see $results" >"$stopped"
     leave="its sign-in stopped, and a two-factor code screen it stopped on stays up for SIGNIN_CODE"
   fi
@@ -772,21 +780,26 @@ refuse_if_stopped() {
 }
 
 # One sign-in on a device at a time: a run holds `<udid>.renewing` while it drives Settings, and
-# another that wants to waits for it (20 minutes at most), then finds the sign-in that run left
-# (signed_meanwhile) or the stop it recorded. The lock is on descriptor 6, closed once the
-# sign-in is over, so nothing the run starts after holds it.
+# another that wants to waits for it (20 minutes at most). What the records were is read before
+# the lock is tried, so a sign-in that ended at any moment before this run held it is seen: one
+# that passed (a new `<udid>.signed-in`, signed_meanwhile) or one that stopped (a new stop,
+# stop_meanwhile). The lock is on descriptor 6, which the background jobs close (tracked,
+# serve_once), and drop_sign_in closes once the sign-in is over.
+record_id() { { stat -f '%i %Fm' "$1" && cat "$1"; } 2>/dev/null || echo none; }
 take_sign_in() {
-  local since
-  signed_meanwhile=no
+  local signed_before stop_before
+  signed_meanwhile=no stop_meanwhile=no
+  signed_before="$(record_id "$signedin")" stop_before="$(record_id "$stopped")"
   exec 6>"$simstate/$udid.renewing"
-  lockf -s -t 0 6 && return 0
-  echo "==> another run is signing $udid in; waiting for it, 20 minutes at most"
-  since="$(date +%s)"
-  if ! lockf -s -t 1200 6; then
-    echo "==> another run has been signing $udid in for 20 minutes; this run types nothing" >&2
-    return 1
+  if ! lockf -s -t 0 6; then
+    echo "==> another run is signing $udid in; waiting for it, 20 minutes at most"
+    if ! lockf -s -t 1200 6; then
+      echo "==> another run has been signing $udid in for 20 minutes; this run types nothing" >&2
+      return 1
+    fi
   fi
-  [ ! -e "$signedin" ] || [ "$(stat -f %m "$signedin")" -lt "$since" ] || signed_meanwhile=yes
+  [ "$(record_id "$signedin")" = "$signed_before" ] || [ ! -e "$signedin" ] || signed_meanwhile=yes
+  [ "$(record_id "$stopped")" = "$stop_before" ] || [ ! -e "$stopped" ] || stop_meanwhile=yes
 }
 drop_sign_in() { exec 6>&-; }
 
@@ -803,6 +816,16 @@ renew_after_boot() {
 if [ "$signin" = yes ]; then
   status=0
   take_sign_in || exit 1
+  # A sign-in asked for by hand is the recovery from a stop, but only from one the person read:
+  # a sign-in that passed or stopped while this one waited for it is not what was asked about.
+  if [ "$signed_meanwhile" = yes ]; then
+    echo "==> the run this one waited for signed $udid in; this run types nothing"
+    leave="it was signed in for the runs after this one"
+    exit 0
+  elif [ "$stop_meanwhile" = yes ]; then
+    echo "==> the sign-in this run waited for stopped ($(cat "$stopped")), so this run types nothing. Read why it stopped, then run --sign-in again" >&2
+    exit 1
+  fi
   sign_in || status=$?
   drop_sign_in
   # A sign-in shut down at once would end with the device: it lives in cloudd's memory alone.
@@ -853,6 +876,7 @@ if [ "$talk" = yes ]; then
         printf '%s\n' "$users" | sed 's/^/      /' >&2
         exit 1
       fi
+      refuse_if_stopped "a boot onto the lane's audio devices would end it"
       xcrun simctl shutdown "$udid" 7>&- 2>/dev/null || true
     } 7>"$simstate/mutex"
     boot_device
