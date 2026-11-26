@@ -211,9 +211,24 @@ struct GitHubCodeSign: View {
     @State private var saying: Task<Void, Never>?
     /// Thirtieths of a second for his arm to take the sign up and settle, for the still.
     static let settleSteps = 90
-    /// The art row the top of a one-line board stands at once he holds it up, his place's
-    /// measure: `testTheBoardStandsWhereItIsPlaced` holds the engine to it.
-    static let boardTop = 79
+    /// The art row the top of his board stands at once he holds `words` up and has settled,
+    /// which is his place's measure over GitHub's page: it moves with the head he wears, so it is
+    /// read off the engine's own still rather than kept.
+    static func boardTop(_ mascot: Mascot, words: String) -> Int {
+        var state = mascot.drawn
+        state.sign = words
+        state.turnOpen = false
+        state.activity = .idle
+        guard let still = WidgetMascotView.still(state.input, steps: settleSteps), still.height >= Topo.height else { return 0 }
+        let perArt = still.height / Topo.height
+        let row = (0..<still.height).first { row in
+            (0..<still.width).contains {
+                SignSeen.drawn(still, at: CGPoint(x: (CGFloat($0) + 0.5) / CGFloat(still.width),
+                                                  y: (CGFloat(row) + 0.5) / CGFloat(still.height)))
+            }
+        }
+        return (row ?? 0) / perArt
+    }
     /// What the board says for a while after a copy.
     static let copiedWords = "Copied"
 
@@ -345,14 +360,18 @@ struct GitHubSignOverPage: View {
     let copy: () -> Void
     @Environment(\.look) private var look
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(Mascot.self) private var mascot
     /// Points below his place he is drawn at; nil before he has begun, which is the screen's foot.
     @State private var below: CGFloat?
     @State private var arrived = false
+    @State private var boardTop: Int?
+    @State private var swimming: Task<Void, Never>?
 
     var body: some View {
         let scale = look.settings.signOverPageScale
         let size = CGSize(width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
-        let top = look.settings.signOverPageTop - CGFloat(GitHubCodeSign.boardTop) * scale
+        let board = boardTop ?? GitHubCodeSign.boardTop(mascot, words: code)
+        let top = look.settings.signOverPageTop - CGFloat(board) * scale
         GeometryReader { proxy in
             let foot = proxy.size.height + proxy.safeAreaInsets.bottom - top
             GitHubCodeSign(code: code, raised: arrived, copies: copies, scale: scale, hint: "Copies the code",
@@ -360,11 +379,20 @@ struct GitHubSignOverPage: View {
                 .frame(width: size.width, height: size.height)
                 .position(x: proxy.size.width / 2, y: top + size.height / 2)
                 .offset(y: below ?? foot)
-                .onAppear { swim(from: foot) }
+                .onAppear {
+                    if boardTop == nil { boardTop = board }
+                    swim(from: foot)
+                }
         }
-        .onDisappear { seen.settled = false }
+        .onDisappear {
+            swimming?.cancel()
+            seen.settled = false
+        }
     }
 
+    /// The swim is SwiftUI's animation, drawn at the display's rate; he arrives when its time is
+    /// up, by the clock, rather than at its completion, which a window not on the screen never
+    /// reports.
     private func swim(from foot: CGFloat) {
         guard below == nil else { return }
         guard !reduceMotion, foot > 0 else {
@@ -372,7 +400,12 @@ struct GitHubSignOverPage: View {
             arrive()
             return
         }
-        withAnimation(.easeInOut(duration: foot / look.mascot.swimSpeed)) { below = 0 } completion: { arrive() }
+        let seconds = foot / look.mascot.swimSpeed
+        withAnimation(.easeInOut(duration: seconds)) { below = 0 }
+        swimming = Task {
+            do { try await Task.sleep(for: .milliseconds(Int(seconds * 1000))) } catch { return }
+            arrive()
+        }
     }
 
     private func arrive() {

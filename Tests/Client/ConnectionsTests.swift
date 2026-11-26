@@ -312,21 +312,14 @@ final class ConnectionsTests: XCTestCase {
         XCTAssertEqual(GitHubCodeSign.words(code: "ABCD-1234", raised: true, sayingCopied: false), "ABCD-1234")
     }
 
-    /// Held up and settled, the board's top is at `GitHubCodeSign.boardTop`, whether it says the
-    /// code or Copied, which is how his place over GitHub's page is measured.
+    /// Held up and settled, the board's top is read off the engine's still: the same row whether
+    /// the board says the code or Copied, above his head, and nothing drawn above it.
     func testTheBoardStandsWhereItIsPlaced() throws {
-        for words in ["ABCD-1234", GitHubCodeSign.copiedWords] {
-            var state = Mascot().drawn
-            state.sign = words
-            state.turnOpen = false
-            let still = try XCTUnwrap(WidgetMascotView.still(state.input, steps: GitHubCodeSign.settleSteps))
-            let perArt = still.height / Topo.height
-            let first = try XCTUnwrap((0..<still.height).first { row in
-                (0..<still.width).contains { SignSeen.drawn(still, at: CGPoint(x: (CGFloat($0) + 0.5) / CGFloat(still.width),
-                                                                                  y: (CGFloat(row) + 0.5) / CGFloat(still.height))) }
-            })
-            XCTAssertEqual(first / perArt, GitHubCodeSign.boardTop, "\(words): the board's top moved")
-        }
+        let mascot = Mascot()
+        let code = GitHubCodeSign.boardTop(mascot, words: "ABCD-1234")
+        XCTAssertEqual(GitHubCodeSign.boardTop(mascot, words: GitHubCodeSign.copiedWords), code, "Copied moved the board")
+        XCTAssertGreaterThan(code, 40)
+        XCTAssertLessThan(code, Topo.height / 2 + 20, "the board's top is not above his head")
     }
 
     /// Over GitHub's page a touch is his only on a drawn pixel of him, inside his frame, once he
