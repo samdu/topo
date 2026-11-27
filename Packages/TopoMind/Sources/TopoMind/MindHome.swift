@@ -32,8 +32,11 @@ public enum MindHome {
     /// The brain's configuration in this home.
     public static func configuration(work: URL = MindHome.work, config: URL = MindHome.config,
                                      claude: URL = NativeBrain.Configuration.defaultClaude) -> NativeBrain.Configuration {
-        NativeBrain.Configuration(workingDirectory: work, configDirectory: config, claude: claude,
-                                  permissionMode: "auto", environment: ["PATH": path])
+        var configuration = NativeBrain.Configuration(workingDirectory: work, configDirectory: config, claude: claude,
+                                                      permissionMode: "auto", environment: ["PATH": path])
+        let launch = config.deletingLastPathComponent().appending(path: MindLaunch.fileName)
+        configuration.extraArguments = { MindLaunch.arguments(at: launch) }
+        return configuration
     }
 
     public struct Unreadable: Error, CustomStringConvertible {

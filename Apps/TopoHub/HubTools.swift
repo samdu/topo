@@ -49,6 +49,8 @@ enum HubTools {
     - `topo --device iphone <tool> [arguments…]` runs one of the phone's own tools on it and prints its answer. `topo --device iphone help` lists the tools the phone lets this Mac run, and `topo --device iphone help <tool>` says how to call one. NAME is `iphone`, `ipad`, or part of a device's name.
     - `topo notify TITLE [BODY]` shows a notification on every one of the person's devices now. For one at a later time, use the phone's own: `topo --device iphone notify TITLE --in 15m`.
 
+    Your own Claude Code's launch is yours to add to: write `~/Library/Application Support/Topo Hub/launch.json` as `{"arguments": ["--mcp-config", "/path/servers.json", "--channels", "name"]}`. The flags taken are `--channels`, `--mcp-config`, `--add-dir`, `--append-system-prompt`, `--plugin-dir` and `--settings`, each with one value. It takes effect at your next turn, when your process is started again with them and resumes this conversation. If Claude Code will not start with them it is started without, so check the file when what you added is not there.
+
     A call to a device waits up to a minute for it. The phone answers at once while Topo is open on it, and otherwise when the system wakes it; a call nothing claimed is cancelled and never runs late, and `topo` says so. Tell the person plainly when the phone did not answer.
     """
 

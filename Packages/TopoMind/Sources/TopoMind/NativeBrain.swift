@@ -85,6 +85,9 @@ public actor NativeBrain: Brain {
         public var silenceBound: Duration
         /// How long one turn may run, however much it writes, before it is given up on.
         public var turnBound: Duration
+        /// More arguments for Claude Code, asked for as a turn is about to be handed over
+        /// (`MindLaunch`): a process started with others is replaced then.
+        public var extraArguments: @Sendable () -> [String] = { [] }
 
         public static let defaultClaude = URL(fileURLWithPath: NSHomeDirectory()).appending(path: ".local/bin/claude")
 
@@ -129,6 +132,8 @@ public actor NativeBrain: Brain {
     private struct Resident {
         let process: MindProcess
         let model: String
+        /// The extra arguments it was started with.
+        var extra: [String] = []
         /// The inputs written to this process.
         var sent: Set<String> = []
         /// A turn on it was given up on: it is torn down and never asked again.
@@ -142,6 +147,8 @@ public actor NativeBrain: Brain {
     private var unread: String?
     private var resident: Resident?
     private var lastFailure: String?
+    /// Why Claude Code would not start with the launch document's arguments, when it would not.
+    public private(set) var launchRefused: String?
     private var busy = false
     private var queue: [CheckedContinuation<Void, Never>] = []
     /// Moves at every `forget`: an answer begun before it records nothing and returns nothing.
@@ -415,11 +422,13 @@ public actor NativeBrain: Brain {
     /// The resident process asking `model`, started (resuming the ledger's session) when there is
     /// none, it has exited, or it asks another model.
     private func running(model: String, epoch: Int) async throws -> MindProcess {
-        if let resident, !resident.stalled, !resident.process.hasExited, resident.model == model { return resident.process }
+        var extra = configuration.extraArguments()
+        if let resident, !resident.stalled, !resident.process.hasExited, resident.model == model,
+           resident.extra == extra { return resident.process }
         // What a start costs, a model's change among them: the old process ended, and a new one
         // resuming the session until it answers `initialize`.
         let began = ContinuousClock.now
-        let replacing = resident.map { $0.model == model ? "exited" : "model" } ?? "none"
+        let replacing = resident.map { $0.model != model ? "model" : $0.extra != extra ? "launch" : "exited" } ?? "none"
         defer {
             if resident?.model == model {
                 Perf.mark("hub.mind.started \(model) replaced=\(replacing) ms=\(Int((ContinuousClock.now - began) / .milliseconds(1)))")
@@ -432,13 +441,13 @@ public actor NativeBrain: Brain {
         }
         await reapLeftover()
         try current(epoch)
-        for _ in 0..<2 {
+        for _ in 0..<3 {
             let session = ledger.session
             let process: MindProcess
             do {
                 process = try MindProcess(executable: configuration.claude.path,
                                           arguments: Self.arguments(model: model, resume: session,
-                                                                    permissionMode: configuration.permissionMode),
+                                                                    permissionMode: configuration.permissionMode) + extra,
                                           environment: Self.environment(for: configuration),
                                           directory: configuration.workingDirectory.path, lifeline: true)
             } catch {
@@ -453,8 +462,11 @@ public actor NativeBrain: Brain {
             }
             switch outcome {
             case .ready:
-                resident = Resident(process: process, model: model)
+                // Started without them after they failed: they stand as tried, so the process is
+                // kept until the document changes.
+                resident = Resident(process: process, model: model, extra: configuration.extraArguments())
                 lastFailure = nil
+                if !extra.isEmpty { launchRefused = nil }
                 return process
             case .noConversation where session != nil:
                 // The session is not in this config directory any more: a fresh one has seen nothing.
@@ -465,6 +477,14 @@ public actor NativeBrain: Brain {
                 continue
             case .noConversation, .ended, .timedOut:
                 _ = await process.terminate()
+                if !extra.isEmpty {
+                    // The document's arguments may be what stopped it: the mind is started without
+                    // them, so it is there to be told and to put the document right.
+                    Perf.mark("hub.mind.launch.refused arguments=\(extra.count / 2)")
+                    launchRefused = String(process.stderrTail.suffix(300)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    extra = []
+                    continue
+                }
                 let why: String
                 switch outcome {
                 case .timedOut: why = "no answer to initialize within \(configuration.startBound)"
