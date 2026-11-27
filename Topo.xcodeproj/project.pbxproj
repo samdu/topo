@@ -385,6 +385,7 @@
 		84CE3B4140640A9E25A88D50 /* VaultHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E8447D928AACA5D0B36ABD /* VaultHome.swift */; };
 		850223B04226B34EC2311541 /* TopoUserland in Frameworks */ = {isa = PBXBuildFile; productRef = 602A0BE4393DC060CB5ABB82 /* TopoUserland */; };
 		86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
+		86D4791D7148007BEE4210AD /* TranscriptEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD3D8C13C6C030DC3EFF956 /* TranscriptEndTests.swift */; };
 		86FEC849BD4916FBBA107211 /* VaultMount.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BCB70D375EC37F314FCB10 /* VaultMount.swift */; };
 		87114BB903BFC9DED6136990 /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
 		879FBB0E8AC74C681499F329 /* MascotDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F8E7A9C85F0395AEB61379F /* MascotDriverTests.swift */; };
@@ -913,6 +914,7 @@
 		18DEE83593874ABE4660BB2D /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		1A7B76958213F991C66478F1 /* DefaultSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultSurface.swift; sourceTree = "<group>"; };
 		1AF008F3C113182739CEB6D7 /* SignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutTests.swift; sourceTree = "<group>"; };
+		1BD3D8C13C6C030DC3EFF956 /* TranscriptEndTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEndTests.swift; sourceTree = "<group>"; };
 		1C9781748E990C71B5291594 /* FilesTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTool.swift; sourceTree = "<group>"; };
 		1D550B30D535A628FF48FCC4 /* WidgetTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTool.swift; sourceTree = "<group>"; };
 		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -1967,6 +1969,7 @@
 				DFDB28FD2CE691449A6664BD /* TimerToolTests.swift */,
 				DC6C5AB2616C520BFBDA88D2 /* TopoCloudKitTests.swift */,
 				DEC7918EC84D993DA25BD251 /* TrackerFetcherTests.swift */,
+				1BD3D8C13C6C030DC3EFF956 /* TranscriptEndTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
 				37C72071D6B88AB32EF3BBFD /* TuningTests.swift */,
 				FAC35DB025A892998B944C54 /* TurnImageTests.swift */,
@@ -3313,6 +3316,7 @@
 				39A7F5C1A583CD0706F83AD6 /* TimerToolTests.swift in Sources */,
 				0B6117BD52D7105F53FF67C5 /* TopoCloudKitTests.swift in Sources */,
 				3B448DB8338390018A1988ED /* TrackerFetcherTests.swift in Sources */,
+				86D4791D7148007BEE4210AD /* TranscriptEndTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
 				E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */,
 				1A33BCD1660B5B04E7A3DBE6 /* TurnImageTests.swift in Sources */,
