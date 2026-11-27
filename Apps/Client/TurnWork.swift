@@ -135,11 +135,15 @@ final class TurnWork {
     }
 
     /// Counts what a turn's steps hold, and lets the oldest turns go past the budget. The newest
-    /// turn, running or just ended, is never let go by it: a turn's row does not vanish as its
-    /// reply lands, and the next turn's first step lets it go if it is still over.
+    /// turn with steps, running or ended, and the turn running are never let go by it: a turn's
+    /// row does not vanish as its reply lands, and the next turn's first step lets it go if it
+    /// is still over.
     func grew(_ nonce: String?, by characters: Int) {
         if let nonce { sizes[nonce, default: 0] += characters }
-        while sizes.values.reduce(0, +) > Self.budget, let oldest = order.dropLast().first {
+        // The newest turn with steps, which a turn begun after it and ending with none does not
+        // displace, and the turn running.
+        let kept = Set([order.last { steps[$0]?.isEmpty == false }, live].compactMap { $0 })
+        while sizes.values.reduce(0, +) > Self.budget, let oldest = order.first(where: { !kept.contains($0) }) {
             order.removeAll { $0 == oldest }
             drop(oldest)
         }

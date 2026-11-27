@@ -24,9 +24,13 @@ final class WorkRowEndTests: XCTestCase {
     }
 
     func testTheRowsWorkComesBeforeTheDraftAndIsDrawnOnce() throws {
-        let row = TranscriptView(turns: PreviewTurns.short, work: ["row": step], rowNonce: "row")
+        let sending = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        XCTAssertEqual(sending.drawer, .row)
+        let row = TranscriptView(turns: PreviewTurns.short, draft: sending, work: ["row": step], rowNonce: "row")
         XCTAssertEqual(row.rowWork, "row")
-        XCTAssertEqual(row.end, AnyHashable(TranscriptView.workID("row")))
+        XCTAssertEqual(row.end, AnyHashable(TranscriptView.workID("row")), "the work under the row's words is the end")
+        XCTAssertEqual(TranscriptView(turns: PreviewTurns.short, draft: sending, rowNonce: "row").end,
+                       AnyHashable(TranscriptView.draftID), "with no work, the words")
 
         let landed = try XCTUnwrap(PreviewTurns.fitting.last)
         let view = TranscriptView(turns: PreviewTurns.fitting, work: [landed.nonce: step], rowNonce: landed.nonce)
