@@ -155,7 +155,8 @@ public actor NativeBrain: Brain {
     private var epoch = 0
     private var wanted = ClaudeModel.default
     /// Told each piece of a turn's reply as Claude Code writes it, once the turn is its own: a
-    /// message begun, its words, a tool call begun (`ReplyCast`). Never a tool's name or input.
+    /// message begun, its words, a tool call begun, that it is thinking, a tool call's name and the file it writes, a result
+    /// gone back (`ReplyCast`). Never a tool's input past that file, or what it thought.
     private var writes: (@Sendable (ReplyFrame) -> Void)?
     /// Told where a turn asked of this brain stands with Claude Code: its input written to stdin,
     /// and its input's echo. For the hub's pass marks; nothing of the turn.
@@ -596,6 +597,12 @@ public actor NativeBrain: Brain {
                         writes?(.text(more))
                     case .toolCallBegan:
                         writes?(.tool)
+                    case .thinking:
+                        writes?(.thinking)
+                    case .toolUse(let name, let path):
+                        writes?(.using(name: name, path: path))
+                    case .toolResult:
+                        writes?(.used)
                     case .signedOut:
                         signedOut = true
                     case .usage(let context, let output):

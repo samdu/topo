@@ -249,6 +249,7 @@ final class Mascot {
     /// is at work for as long as a turn it sent is open, whatever screen is showing.
     func follow(_ harness: Harness) {
         harness.onGuest = { [self] activity in follow(activity) }
+        harness.onHub = { [self] activity in follow(activity) }
         watchTurn(of: harness)
     }
 

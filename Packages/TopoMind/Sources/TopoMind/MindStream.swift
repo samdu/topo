@@ -17,6 +17,12 @@ enum MindEvent: Sendable, Equatable {
     case writing(String)
     /// A tool call begun in a message of the turn's own (`content_block_start` of a `tool_use`).
     case toolCallBegan
+    /// A thinking block begun or written: that the model thought, and nothing of what.
+    case thinking
+    /// A tool call of the turn's own, whole: its name and, for a tool that writes a file, the file.
+    case toolUse(name: String, path: String?)
+    /// A tool's result going back to the model.
+    case toolResult
     /// An assistant line Claude Code wrote because the login failed (`error: authentication_failed`).
     case signedOut
     /// An assistant message's usage: context tokens (input and cache together) and output tokens.
@@ -47,6 +53,10 @@ enum MindStream {
     /// The model Claude Code names on a message it wrote itself.
     static let synthetic = "<synthetic>"
 
+    /// The tools that write a file, and the key of their input that names it (the phone's
+    /// `StreamJSON.fileTools`).
+    static let fileTools = ["Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"]
+
     static func events(in line: String) -> [MindEvent] {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return [] }
@@ -70,6 +80,19 @@ enum MindStream {
                     }
                 }
             }
+            for case let block as [String: Any] in message["content"] as? [Any] ?? [] {
+                switch block["type"] as? String {
+                case "thinking", "redacted_thinking":
+                    events.append(.thinking)
+                case "tool_use":
+                    guard let name = block["name"] as? String else { continue }
+                    events.append(.toolUse(name: name, path: fileTools[name].flatMap {
+                        (block["input"] as? [String: Any])?[$0] as? String
+                    }))
+                default:
+                    break
+                }
+            }
             if let usage = message["usage"] as? [String: Any] {
                 let context = int(usage["input_tokens"]) + int(usage["cache_creation_input_tokens"])
                     + int(usage["cache_read_input_tokens"])
@@ -84,8 +107,11 @@ enum MindStream {
             case "message_start":
                 return [.writingBegan]
             case "content_block_start":
-                guard (event["content_block"] as? [String: Any])?["type"] as? String == "tool_use" else { return [.other(type)] }
-                return [.toolCallBegan]
+                switch (event["content_block"] as? [String: Any])?["type"] as? String {
+                case "tool_use": return [.toolCallBegan]
+                case "thinking", "redacted_thinking": return [.thinking]
+                default: return [.other(type)]
+                }
             case "content_block_delta":
                 guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                       let text = delta["text"] as? String, !text.isEmpty else { return [.other(type)] }
@@ -96,6 +122,13 @@ enum MindStream {
         case ("user", _) where object["isReplay"] as? Bool == true:
             guard let id = object["uuid"] as? String else { return [.other("user/replay")] }
             return [.received(id: id)]
+        case ("user", _):
+            // A tool's result, in a message of the turn's own.
+            guard !subagents, let content = (object["message"] as? [String: Any])?["content"] as? [Any],
+                  content.contains(where: { ($0 as? [String: Any])?["type"] as? String == "tool_result" }) else {
+                return [.other(type)]
+            }
+            return [.toolResult]
         case ("control_response", _):
             guard let response = object["response"] as? [String: Any], let id = response["request_id"] as? String else {
                 return [.other(type)]

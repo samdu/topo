@@ -15,6 +15,13 @@ public enum ReplyFrame: Sendable, Equatable {
     case text(String)
     /// A tool call begun in the message: its words so far are whole (`StreamEvent.toolCallBegan`).
     case tool
+    /// The model is thinking: that it is, and nothing of what.
+    case thinking
+    /// A tool call made: the tool's name and, for a tool that writes a file, the file. Nothing
+    /// else of its input.
+    case using(name: String, path: String?)
+    /// A tool's result has gone back to the model: the wait is on the model again.
+    case used
     /// The mind's answer on the reply ended without one (it threw): its process exited, it
     /// stalled, the turn failed, or the mind stopped or slept under it. What was streamed is no
     /// reply, and goes; the turn may still be answered later, in the log, by a pass that asks it
@@ -29,6 +36,9 @@ public enum ReplyFrame: Sendable, Equatable {
         case .message: ["k": "message"]
         case .text(let text): ["k": "text", "t": text]
         case .tool: ["k": "tool"]
+        case .thinking: ["k": "thinking"]
+        case .using(let name, let path): path.map { ["k": "using", "n": name, "p": $0] } ?? ["k": "using", "n": name]
+        case .used: ["k": "used"]
         case .cut: ["k": "cut"]
         }
         var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -61,6 +71,11 @@ public enum ReplyFrame: Sendable, Equatable {
             guard let text = object["t"] as? String else { return nil }
             self = .text(text)
         case "tool": self = .tool
+        case "thinking": self = .thinking
+        case "using":
+            guard let name = object["n"] as? String else { return nil }
+            self = .using(name: name, path: object["p"] as? String)
+        case "used": self = .used
         case "cut": self = .cut
         default: return nil
         }

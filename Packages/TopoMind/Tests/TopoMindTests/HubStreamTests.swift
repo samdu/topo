@@ -22,7 +22,7 @@ final class Frames: @unchecked Sendable {
             case .text(let more):
                 if messages.isEmpty { messages.append("") }
                 messages[messages.count - 1] += more
-            case .tool, .cut: break
+            case .tool, .cut, .thinking, .using, .used: break
             }
         }
         return messages.filter { !$0.allSatisfy(\.isWhitespace) }.joined(separator: "\n\n")
@@ -60,7 +60,16 @@ final class Frames: @unchecked Sendable {
         #expect(answered.lock.withLock { answered.value } == nil)
         #expect(try await h.replies().isEmpty)
         #expect(frames.frames.first == .turn([person.ref]))
-        #expect(frames.frames == [.turn([person.ref]), .message, .text("One. "), .text("Two."), .tool, .message, .text("Three.")])
+        // The reply's own pieces, in order; what the mind was doing between them is told beside.
+        let pieces = frames.frames.filter {
+            switch $0 {
+            case .thinking, .using, .used: false
+            default: true
+            }
+        }
+        #expect(pieces == [.turn([person.ref]), .message, .text("One. "), .text("Two."), .tool, .message, .text("Three.")])
+        // The tool call is told by its name alone: Bash writes no file, so no path.
+        #expect(frames.frames.filter { !pieces.contains($0) } == [.using(name: "Bash", path: nil)])
         // Nothing of the tool call's input or of the sub-agent's words is handed.
         #expect(!frames.frames.contains { if case .text(let t) = $0 { t.contains("SECRET") || t.contains("SUBAGENT") } else { false } })
         try Data().write(to: h.rig.log.appending(path: "release"))

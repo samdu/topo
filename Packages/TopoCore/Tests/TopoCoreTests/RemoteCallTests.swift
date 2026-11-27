@@ -71,3 +71,12 @@ private actor Counter {
     var value = 0
     func add() { value += 1 }
 }
+
+@Suite struct ReplyFrameActivityTests {
+    @Test func activityFramesRoundTrip() {
+        for frame in [ReplyFrame.thinking, .using(name: "Write", path: "/a b/c.md"), .using(name: "Bash", path: nil), .used] {
+            let line = String(decoding: frame.line, as: UTF8.self).trimmingCharacters(in: .newlines)
+            #expect(ReplyFrame(line: line) == frame)
+        }
+    }
+}

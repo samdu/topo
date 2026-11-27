@@ -28,3 +28,20 @@ import Testing
         try FileManager.default.removeItem(at: file)
     }
 }
+
+@Suite struct MindStreamActivityTests {
+    @Test func aToolCallSaysItsNameAndAWrittenFileAndNothingElse() {
+        let line = #"{"type":"assistant","message":{"id":"m","content":[{"type":"thinking","thinking":"secret"},{"type":"tool_use","name":"Write","input":{"file_path":"/a/b.swift","content":"x"}},{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#
+        let events = MindStream.events(in: line)
+        #expect(events.contains(.thinking))
+        #expect(events.contains(.toolUse(name: "Write", path: "/a/b.swift")))
+        #expect(events.contains(.toolUse(name: "Bash", path: nil)))
+    }
+
+    @Test func aToolResultOfTheTurnsOwnIsToldAndASubagentsIsNot() {
+        let own = #"{"type":"user","message":{"content":[{"type":"tool_result","content":"out"}]}}"#
+        let sub = #"{"type":"user","parent_tool_use_id":"t1","message":{"content":[{"type":"tool_result","content":"out"}]}}"#
+        #expect(MindStream.events(in: own) == [.toolResult])
+        #expect(MindStream.events(in: sub) != [.toolResult])
+    }
+}

@@ -206,6 +206,10 @@ final class Harness {
     /// told of a limb's turn whose hub streamed its reply and then said its answer ended without
     /// one (`ReplyFrame.cut`), before the stream's reader is told the words stopped.
     var onTurnFailure: (@MainActor (String) -> Void)?
+    /// What a hub's mind is doing on a turn this phone handed it, as its stream says
+    /// (`ReplyFrame`): begun, thinking, a tool's name and file, a result gone back, and gone. For
+    /// Topo on the glass alone; nothing of the guest's listens.
+    var onHub: (@MainActor (GuestActivity) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
     private var owedAloud: [Turn] {
@@ -1405,6 +1409,8 @@ final class Harness {
             self.nudges[id] = nil
             guard self.login == login, !Task.isCancelled else { return }
             Perf.mark("turn.nudge.end \(mark) \(read ? "read" : "no")")
+            // The hub's pass on the turn is over, whatever it came to.
+            self.onHub?(.gone(answering: [ref]))
             // A nudge that streamed nothing leaves nothing to draw; one that streamed words keeps
             // them until the log has the turn's reply or goes on from it some other way.
             self.streamed.removeAll { $0.ref == ref && $0.answering == nil }
@@ -1468,6 +1474,7 @@ final class Harness {
             entry.settled = false
             entry.handed = nil
             entry.spoken = spokenNonces.contains(entry.nonce)
+            onHub?(.began(pid: nil, answering: refs))
         case .message:
             guard entry.answering != nil else { return }
             entry.words.begin()
@@ -1480,12 +1487,22 @@ final class Harness {
         case .tool:
             guard entry.answering != nil else { return }
             entry.settled = !entry.text.isEmpty
+        case .thinking:
+            guard entry.answering != nil else { return }
+            onHub?(.update(.event(.thinking)))
+        case .using(let name, let path):
+            guard entry.answering != nil else { return }
+            onHub?(.update(.event(.toolUse(name: name, path: path))))
+        case .used:
+            guard entry.answering != nil else { return }
+            onHub?(.update(.event(.toolResult(isError: false, text: ""))))
         case .cut:
             // The hub's mind was cut off on the reply, and none is to come from it: the row goes,
             // and so does the spoken wait, as for a turn that failed here.
             guard entry.answering != nil else { return }
             streamed.remove(at: i)
             Perf.mark("turn.stream.cut \(entry.mark)")
+            onHub?(.gone(answering: entry.answering ?? []))
             onTurnFailure?(entry.nonce)
             if entry.handed != nil { onWriting?(nil, entry.nonce) }
             onTurnFailed?(entry.nonce)
