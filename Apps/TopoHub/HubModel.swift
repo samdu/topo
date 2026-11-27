@@ -424,7 +424,19 @@ final class HubModel {
         pairingCode = PairingCode(record)
         if tools == nil, store == .cloudKit {
             let directory = directory
-            let everyDevice: @Sendable () async -> [Device] = { (try? await directory.all()) ?? [] }
+            let records = database
+            // The directory holds the devices that registered (the Macs, the surfaces). A phone or
+            // a pad is known by its role record, and the primary among them is "the phone".
+            let everyDevice: @Sendable () async -> [Device] = {
+                var all = (try? await directory.all()) ?? []
+                let roles = ((try? await records.records(ofType: DeviceRole.recordType)) ?? []).compactMap(DeviceRole.init(record:))
+                for role in roles where !all.contains(where: { $0.id == role.device }) && role.device.rawValue.hasPrefix("ios-") {
+                    all.append(Device(id: role.device, name: role.role == .primary ? "the primary phone" : "a viewer",
+                                      kind: role.role == .primary ? .phone : .pad, publicKey: "", endpoints: [],
+                                      registeredAt: role.at, seenAt: role.at))
+                }
+                return all
+            }
             let token = ToolService.newToken()
             let service = try ToolService(tools: [
                 DeviceTool(hub: device, database: database, devices: everyDevice, alertAfter: {
