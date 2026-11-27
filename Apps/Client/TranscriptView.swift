@@ -39,8 +39,17 @@ struct TranscriptView: View {
     var work: [String: [WorkStep]] = [:]
     /// The nonce of the turn the guest is answering now, whose row is live.
     var liveWork: String?
-    /// The nonce of the turn the row holds, whose work is drawn between the row and its answer.
+    /// The nonce of the turn the row holds, whose work is drawn between the row and its answer
+    /// until the log has the turn (`rowWork`).
     var rowNonce: String?
+
+    /// The row's turn whose work is drawn between the row and its answer: none once a turn of the
+    /// log carries its nonce, whose own work row is drawn under it instead, so a turn's work is
+    /// drawn once.
+    var rowWork: String? {
+        guard let rowNonce, !turns.contains(where: { $0.nonce == rowNonce }) else { return nil }
+        return rowNonce
+    }
     @Environment(\.look) private var look
     /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
     /// own place, and the block waiting on its row to be made; a reference, so a row coming and
@@ -84,7 +93,7 @@ struct TranscriptView: View {
                     if let draft, draft.drawer == .row {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
-                    if let rowNonce { workRow(rowNonce) }
+                    if let rowWork { workRow(rowWork) }
                     if let answer { TurnRow(turn: answer, replay: replay, actions: actions).id(answer.ref) }
                     ForEach(queued.after) { queued($0) }
                 }
@@ -171,7 +180,7 @@ struct TranscriptView: View {
     var end: AnyHashable? {
         if let last = queued.after.last { return end(of: last) }
         if let answer { return AnyHashable(answer.ref) }
-        if let row = workEnd(rowNonce) { return row }
+        if let row = workEnd(rowWork) { return row }
         if draft?.drawer == .row { return AnyHashable(Self.draftID) }
         if let last = queued.before.last { return end(of: last) }
         guard let last = turns.last else { return nil }

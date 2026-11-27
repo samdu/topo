@@ -109,15 +109,17 @@ final class TurnWorkTests: XCTestCase {
         XCTAssertTrue(work.steps.isEmpty, "a step outlived the login")
     }
 
-    func testATurnOverTheBudgetIsLetGoOnceItEnds() {
+    func testATurnOverTheBudgetStaysUntilTheNextTurnsFirstStep() {
         let work = TurnWork()
         let big = String(repeating: "x", count: TurnWork.budget / 2 + 1)
         run(work, heard: "small", [.thought("x")])
         run(work, heard: "big", [.thought(big), .thought(big)])
-        XCTAssertNotNil(work.steps["big"], "kept while it runs")
         XCTAssertNil(work.steps["small"], "the older turn goes first")
         work.follow(.gone(answering: [], heard: "big"))
-        XCTAssertNil(work.steps["big"], "past the budget once over")
+        XCTAssertEqual(work.steps["big"]?.count, 2, "its row does not vanish as its reply lands")
+        run(work, heard: "next", [.thought("y")])
+        XCTAssertNil(work.steps["big"], "the next turn's first step lets it go")
+        XCTAssertNotNil(work.steps["next"])
     }
 }
 

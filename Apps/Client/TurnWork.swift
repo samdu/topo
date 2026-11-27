@@ -23,9 +23,9 @@ struct WorkStep: Identifiable, Equatable, Sendable {
     let kind: Kind
     var outcome: Outcome?
 
-    /// The glyph the closed row draws for the step: a kind of work, the one rule the Discord
-    /// strip and Daphne's row share (buddy-channels `discord/classify.ts`), narrowed to the tools
-    /// a Topo has.
+    /// The glyph the closed row draws for the step: the web and the shell, then the keeper's own
+    /// kinds of tool (`KeeperSounds.tone(forTool:)`), the glyphs the Discord strip and Daphne's
+    /// row draw (buddy-channels `discord/classify.ts`).
     var glyph: String {
         switch kind {
         case .thought: return "💭"
@@ -69,7 +69,7 @@ final class TurnWork {
     private var order: [String] = []
     static let keep = 40
     /// The most characters of steps kept across every turn: past it the oldest turns go, never
-    /// the live one, since a turn can make any number of steps of up to 96K characters each.
+    /// the newest, since a turn can make any number of steps of up to 96K characters each.
     static let budget = 4_000_000
     private var sizes: [String: Int] = [:]
 
@@ -134,10 +134,12 @@ final class TurnWork {
         while order.count > Self.keep { drop(order.removeFirst()) }
     }
 
-    /// Counts what a turn's steps hold, and lets the oldest turns go past the budget.
+    /// Counts what a turn's steps hold, and lets the oldest turns go past the budget. The newest
+    /// turn, running or just ended, is never let go by it: a turn's row does not vanish as its
+    /// reply lands, and the next turn's first step lets it go if it is still over.
     func grew(_ nonce: String?, by characters: Int) {
         if let nonce { sizes[nonce, default: 0] += characters }
-        while sizes.values.reduce(0, +) > Self.budget, let oldest = order.first(where: { $0 != live }) {
+        while sizes.values.reduce(0, +) > Self.budget, let oldest = order.dropLast().first {
             order.removeAll { $0 == oldest }
             drop(oldest)
         }
