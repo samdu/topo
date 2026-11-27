@@ -27,6 +27,23 @@ func within<T: Sendable>(_ seconds: Double, _ work: @escaping @Sendable () async
 
 @Suite(.serialized) struct HubNudgeTests {
     /// A hub with no poll to speak of: only a start, a trigger or a nudge runs a pass.
+    @Test func aBatchFromTheInboxIsATurnTheMindAnswersAndIsRefusedWhileOff() async throws {
+        let h = try HubRig()
+        let hub = quiet(h)
+        // Mutant: a batch written while this Mac does not answer, for a phone to answer instead.
+        #expect(await hub.hear("ignored") == false)
+        await hub.turnOn()
+        #expect(await eventually { let s = await hub.snapshot(); return s.holds && s.passes >= 1 })
+        #expect(await hub.hear("Calendar: dentist at 3."))
+        #expect(try await eventually { try await !h.replies().isEmpty })
+        let turns = try await TurnLog(database: h.db).read().ordered
+        let told = try #require(turns.first { $0.role == .person })
+        #expect(told.text.hasPrefix(Inbox.heading) && told.text.hasSuffix("Calendar: dentist at 3."))
+        #expect(told.ref.device == h.hubID)
+        #expect(try await h.replies().count == 1)
+        #expect(Inbox.isNothing(" nothing to report.\n") && !Inbox.isNothing("Nothing to report, except the dentist."))
+    }
+
     func quiet(_ h: HubRig, over database: (any RecordDatabase)? = nil) -> HubMind {
         let configuration = h.configuration
         return HubMind(database: database ?? h.db, device: h.hubID, endpoint: "127.0.0.1:1", probe: Confirming(),

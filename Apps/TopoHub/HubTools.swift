@@ -145,6 +145,20 @@ struct DeviceTool: Tool {
     }
 }
 
+/// `topo inbox TEXT`: a batch of signals handed to the mind as a turn (`HubMind.hear`). The
+/// door the hub's inbox service delivers through.
+struct InboxTool: Tool {
+    let hear: @Sendable (String) async -> Bool
+    let name = "inbox"
+    let summary = "hands the mind a batch of collected signals as a turn; the inbox service's own door"
+    let usage = "topo inbox TEXT                     the mind is told TEXT at its next pass and answers in the transcript\n"
+
+    func run(_ arguments: [String]) async -> ToolReply {
+        guard arguments.count == 1, !arguments[0].allSatisfy(\.isWhitespace) else { return .usage(usage) }
+        return await hear(arguments[0]) ? .ok("told\n") : .failed("topo: the mind on this Mac is not answering now, so nothing was told\n")
+    }
+}
+
 /// `topo notify TITLE [BODY]`: words shown now on every device of the Apple ID (`RemoteAlert`).
 struct AlertTool: Tool {
     let hub: DeviceID

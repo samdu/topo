@@ -446,6 +446,7 @@ final class HubModel {
                 }),
                 AlertTool(hub: device, database: database),
                 DevicesTool(devices: everyDevice),
+                InboxTool(hear: { [weak self] text in await self?.hubMind?.hear(text) ?? false }),
             ], token: token, bound: .seconds(190))
             let port = try await service.start()
             try HubTools.install(port: port, token: token, root: mindRoot,
@@ -505,7 +506,7 @@ final class HubModel {
                 // The reply's opening, as a notification on the person's devices: a device with
                 // Topo in front shows the reply itself and no banner (`ReplyPush`).
                 guard store == .cloudKit, UserDefaults.standard.object(forKey: HubModel.replyPushKey) as? Bool ?? true,
-                      let alert = RemoteAlert.reply(reply.text, from: device) else { return }
+                      !Inbox.isNothing(reply.text), let alert = RemoteAlert.reply(reply.text, from: device) else { return }
                 do {
                     try await alert.save(to: database)
                     Perf.mark("hub.reply.alert.saved")

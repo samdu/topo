@@ -156,6 +156,8 @@ public actor HubMind {
     private var nudged: [(mark: String, answer: CheckedContinuation<Bool, Never>)] = []
     /// Passes run again after a nudged one found nothing, since the last that found something.
     private var againAfterNudge = 0
+    /// This Mac's writer, the runner's own: its appends run one at a time.
+    private var writer: TurnWriter?
     /// The heads-up the pass asked for or running now waits on (`headsUp`), until that pass ends.
     private var coming: ComingTurn?
     /// Nudges that came down the heads-up's connection once its turn was saved: the pass waiting
@@ -354,6 +356,25 @@ public actor HubMind {
         return await withCheckedContinuation { nudged.append((mark.lowercased(), $0)) }
     }
 
+    /// What the mind is told that no device's person typed (the hub's inbox): a turn of the log's
+    /// like any other, under `Inbox.heading`, so the next pass answers it, its reply is in the
+    /// transcript, and a phone sees both. Only while this Mac answers; false with nothing written
+    /// otherwise, or when the log could not be read or written.
+    public func hear(_ text: String) async -> Bool {
+        guard on, !asleep, session != nil, phase == .answering, let writer, await lease.isPrimary() else { return false }
+        do {
+            let transcript = try await log.read()
+            _ = try await writer.append(.person, Inbox.heading + "\n\n" + text, continuing: transcript)
+        } catch {
+            Perf.mark("hub.inbox.failed \(Self.kind(of: error))")
+            return false
+        }
+        Perf.mark("hub.inbox.heard chars=\(text.count)")
+        if requested == nil { requested = .push }
+        waiting?.cancel()
+        return true
+    }
+
     /// Whether a turn a nudge named is not in the log as read now: a pass that found nothing may
     /// have read the zone's change feed before it had the phone's save. A mark is the first eight
     /// letters or digits of the turn's nonce (`Harness.turnMark`). A read that fails is unseen.
@@ -523,6 +544,7 @@ public actor HubMind {
                 guard current(g) else { return nil }
                 let made = TurnRunner(log: log, writer: writer, lease: lease, brain: timed)
                 runner = made
+                self.writer = writer
                 return made
             } catch {
                 Perf.mark("hub.writer.failed \(Self.kind(of: error))")
