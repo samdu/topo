@@ -22,6 +22,7 @@ struct TopoApp: App {
     private let endpoint: Endpoint
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
+    @State private var work: TurnWork
     @State private var widgetCues: WidgetCues
     @State private var shares: ShareInbox
     @State private var attachments: ComposerAttachments
@@ -66,6 +67,10 @@ struct TopoApp: App {
         mascot.follow(harness)
         _harness = State(initialValue: harness)
         _mascot = State(initialValue: mascot)
+        // What the guest does between the words of each turn, for the transcript's work row.
+        let work = TurnWork()
+        work.follow(harness)
+        _work = State(initialValue: work)
         let memory = Memory.standard(database: AppRecords.database(), ensureZone: AppRecords.ensureZone)
         _memory = State(initialValue: memory)
         // The guest's mount of the memory follows the same home the mirror runs against.
@@ -295,7 +300,7 @@ struct TopoApp: App {
     /// The app: the chat and everything the scene's phases drive.
     private var chat: some View {
         RootView().environment(signIn).environment(harness).environment(roleSelector)
-            .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot)
+            .environment(voice).environment(speaker).environment(conversation).environment(memory).environment(mascot).environment(work)
             .environment(connections).environment(attachments)
             // An image a turn carries is drawn from the guest's home, which is on this phone; the
             // root hands it to the signed-in chat alone (`RootView`).

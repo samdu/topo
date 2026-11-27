@@ -92,7 +92,7 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(tool("Write", #"{"file_path":7}"#), [.toolUse(name: "Write")])
         XCTAssertEqual(tool("Write", #"{"path":"/d.md"}"#), [.toolUse(name: "Write")])
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"x"}]}}"#),
-                       [.thinking])
+                       [.thinking, .thought(nil)])
     }
 
     func testTheFailedResumeIsAnErrorResult() throws {

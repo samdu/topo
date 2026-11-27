@@ -50,6 +50,8 @@ struct Look: Equatable, Sendable {
     var reading = Reading()
     /// The bars that show what a new install is still fetching and preparing.
     var setup = Setup()
+    /// The row under a person's turn saying what the guest did before it answered.
+    var work = Work()
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -867,6 +869,48 @@ extension Look {
         var font: Font = .body
         static let largestFont: Double = 34
         var ink = Theme.textMuted
+    }
+
+    /// The work row (`WorkRow`): closed, one line of a glyph per step and the count of calls;
+    /// open, a line per step; a line opened, that step in full. Not read from `look.json` yet.
+    struct Work: Equatable, Sendable {
+        /// The closed line, and each step's line.
+        var font: Font = .system(size: 11, weight: .medium, design: .monospaced)
+        /// A glyph on the closed line.
+        var glyphFont: Font = .system(size: 12)
+        /// The chevron at the closed line's leading end.
+        var chevronFont: Font = .system(size: 9, weight: .semibold)
+        /// A step opened: its input, its result, a thought's text.
+        var detailFont: Font = .system(size: 11, design: .monospaced)
+        /// The heading over each part of a step opened.
+        var headingFont: Font = .system(size: 9, weight: .semibold, design: .monospaced)
+        var ink = Theme.textMuted
+        /// A call that failed: its mark on the closed line, its heading and its cross.
+        var failed = Color.red
+        /// The rule down the leading edge of a step opened, and its "show all".
+        var accent = Theme.textMuted
+        /// Behind a step opened.
+        var detailBackground = Theme.textMuted.opacity(0.08)
+        var ruleWidth: CGFloat = 2
+        var detailPadding: CGFloat = 8
+        /// From the closed line to the lines under it, and between those lines.
+        var spacing: CGFloat = 5
+        /// How far the lines are set in from the closed line.
+        var indent: CGFloat = 14
+        /// Glyphs on the closed line before the rest are counted as "+n".
+        var glyphsShown = 24
+        /// How much of a step's part is drawn inline before "show all" opens it on a sheet.
+        var inlineCharacters = 1_200
+        var inlineLines = 18
+        /// Between the closed line's glyphs; between a step line's glyph, words and outcome;
+        /// between a part's heading and its text.
+        var glyphSpacing: CGFloat = 4
+        var lineSpacing: CGFloat = 6
+        var headingSpacing: CGFloat = 3
+        /// The side of the mark on a failed call's glyph.
+        var failedMark: CGFloat = 4
+        /// How long a depth takes to open or close, in seconds.
+        var opening: Double = 0.18
     }
 
     /// The setup's meter: a thin bar for each part of an install still to come, one over the

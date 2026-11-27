@@ -34,6 +34,13 @@ struct TranscriptView: View {
     /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
     /// pulsing by the reply it is in. Nil on a screen with no voice.
     var cue: CodeBlockCue?
+    /// What the guest did before each reply, by the nonce of the person's turn it answers
+    /// (`TurnWork`): drawn under that turn. Empty on a screen that ran no turn.
+    var work: [String: [WorkStep]] = [:]
+    /// The nonce of the turn the guest is answering now, whose row is live.
+    var liveWork: String?
+    /// The nonce of the turn the row holds, whose work is drawn between the row and its answer.
+    var rowNonce: String?
     @Environment(\.look) private var look
     /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
     /// own place, and the block waiting on its row to be made; a reference, so a row coming and
@@ -70,12 +77,14 @@ struct TranscriptView: View {
                                     askAgain: askAgain(turn)).id(turn.ref)
                                 .onAppear { made.turns.insert(turn.ref) }
                                 .onDisappear { made.turns.remove(turn.ref) }
+                            if turn.role == .person { workRow(turn.nonce) }
                         }
                     }
                     ForEach(queued.before) { queued($0) }
                     if let draft, draft.drawer == .row {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
+                    if let rowNonce { workRow(rowNonce) }
                     if let answer { TurnRow(turn: answer, replay: replay, actions: actions).id(answer.ref) }
                     ForEach(queued.after) { queued($0) }
                 }
@@ -289,9 +298,19 @@ extension TranscriptView {
         return { ask(ref) }
     }
 
+    /// What the guest did answering the person's turn with this nonce, when this device ran it.
+    @ViewBuilder fileprivate func workRow(_ nonce: String) -> some View {
+        #if os(iOS)
+        if let steps = work[nonce], !steps.isEmpty {
+            WorkRow(steps: steps, live: liveWork == nonce).id("work-\(nonce)")
+        }
+        #endif
+    }
+
     /// A turn on its way, and under it the guest's reply when it has one the log does not.
     @ViewBuilder fileprivate func queued(_ turn: QueuedTurn) -> some View {
         QueuedTurnRow(turn: turn, line: line).id(turn.id)
+        workRow(turn.nonce)
         if let reply = turn.reply { TurnRow(turn: reply, replay: replay, actions: actions).id(reply.ref) }
     }
 }
