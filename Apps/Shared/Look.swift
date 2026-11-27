@@ -872,7 +872,7 @@ extension Look {
     }
 
     /// The work row (`WorkRow`): closed, one line of a glyph per step and the count of calls;
-    /// open, a line per step; a line opened, that step in full. Not read from `look.json` yet.
+    /// open, a line per step; a line opened, that step in full.
     struct Work: Equatable, Sendable {
         /// The closed line, and each step's line.
         var font: Font = .system(size: 11, weight: .medium, design: .monospaced)

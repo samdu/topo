@@ -150,6 +150,31 @@ enum LookDocument {
         r.object("bar") { bar(&look.bar, $0) }
         r.object("reading") { reading(&look.reading, $0) }
         r.object("setup") { setup(&look.setup, $0) }
+        r.object("work") { work(&look.work, $0) }
+    }
+
+    private static func work(_ value: inout Look.Work, _ r: Reader) {
+        r.font("font", &value.font)
+        r.font("glyphFont", &value.glyphFont)
+        r.font("chevronFont", &value.chevronFont)
+        r.font("detailFont", &value.detailFont)
+        r.font("headingFont", &value.headingFont)
+        r.colour("ink", &value.ink)
+        r.colour("failed", &value.failed)
+        r.colour("accent", &value.accent)
+        r.colour("detailBackground", &value.detailBackground)
+        r.indent("ruleWidth", &value.ruleWidth)
+        r.indent("detailPadding", &value.detailPadding)
+        r.indent("spacing", &value.spacing)
+        r.indent("indent", &value.indent)
+        r.count("glyphsShown", &value.glyphsShown, in: 1...200)
+        r.count("inlineCharacters", &value.inlineCharacters, in: 80...20_000)
+        r.count("inlineLines", &value.inlineLines, in: 1...200)
+        r.indent("glyphSpacing", &value.glyphSpacing)
+        r.indent("lineSpacing", &value.lineSpacing)
+        r.indent("headingSpacing", &value.headingSpacing)
+        r.indent("failedMark", &value.failedMark)
+        r.seconds("opening", &value.opening)
     }
 
     private static func reading(_ value: inout Look.Reading, _ r: Reader) {

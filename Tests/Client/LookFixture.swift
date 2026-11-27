@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 271
+    static let fields = 292
 
     static let full = """
     {
@@ -241,7 +241,15 @@ enum LookFixture {
       "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"],
                "slider": { "width": 150, "height": 30, "padding": 9, "drop": 4, "inset": 20, "track": 2, "stop": 5, "knob": 12,
                            "restOpacity": 0.5, "restLabelOpacity": 0.6,
-                           "labelFont": { "style": "caption", "weight": "bold" }, "labelSpacing": 4 } }
+                           "labelFont": { "style": "caption", "weight": "bold" }, "labelSpacing": 4 } },
+      "work": { "font": { "style": "footnote", "weight": "bold" }, "glyphFont": { "style": "body", "weight": "regular" },
+                "chevronFont": { "style": "caption2", "weight": "heavy" }, "detailFont": { "style": "callout", "weight": "light" },
+                "headingFont": { "style": "caption", "weight": "black" },
+                "ink": ["#304050", "#D0C0B0"], "failed": ["#C02010", "#FF8070"], "accent": ["#106070", "#80D0E0"],
+                "detailBackground": ["#F0F0E8", "#202018"],
+                "ruleWidth": 3, "detailPadding": 10, "spacing": 7, "indent": 18, "glyphsShown": 12,
+                "inlineCharacters": 900, "inlineLines": 12, "glyphSpacing": 6, "lineSpacing": 8, "headingSpacing": 5,
+                "failedMark": 6, "opening": 0.3 }
     }
     """
 
