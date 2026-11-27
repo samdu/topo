@@ -385,7 +385,7 @@ public actor NativeBrain: Brain {
 
     /// The process's whole environment: the few variables of this one in `inherited`, the
     /// configuration's own, and `CLAUDE_CONFIG_DIR` last.
-    static func environment(for configuration: Configuration,
+    public static func environment(for configuration: Configuration,
                             parent: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
         var environment = parent.filter { inherited.contains($0.key) }
         environment["HOME"] = environment["HOME"] ?? NSHomeDirectory()

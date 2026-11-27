@@ -51,6 +51,13 @@ enum HubTools {
 
     Your own Claude Code's launch is yours to add to: write `~/Library/Application Support/Topo Hub/launch.json` as `{"arguments": ["--mcp-config", "/path/servers.json", "--channels", "name"]}`. The flags taken are `--channels`, `--mcp-config`, `--add-dir`, `--append-system-prompt`, `--plugin-dir`, `--settings` and `--dangerously-load-development-channels`, each with one value. A channel of the person's own (an MCP server from `--mcp-config` or your settings) is loaded with the last: `\"--dangerously-load-development-channels\", \"server:buddy-inbox\"`, several names in the one value with spaces between. It takes effect at your next turn, when your process is started again with them and resumes this conversation. If Claude Code will not start with them it is started without, so check the file when what you added is not there.
 
+    You can have this Mac watch things for the person and tell you what is new: write `~/Library/Application Support/Topo Hub/inbox.json`.
+
+        {"sources": [{"name": "mail", "command": "…", "every": "15m", "urgent": false}],
+         "flush": "2h", "quiet": {"from": "23:00", "to": "07:00"}}
+
+    Each source is a shell command you write that prints what there is now, one item a line, the same line for the same item every time (mail, messages with `imsg`, calendar events, reminders, anything a command can read). The hub runs it every `every` (`90s`, `15m`, `2h`; a minute at least), remembers the lines it has printed, and hands you only new ones as a turn headed as from the inbox. A source's first run tells you nothing: what is there already is not news. New lines wait together for `flush` and are not told in the `quiet` hours, except from a source marked `urgent`, whose new line is told at once at any hour. A command that exits non-zero tells you nothing, so test it in your shell first. The file is read afresh each time, so a change needs no restart, and taking a source out forgets what it had seen. For something that should reach you the moment it happens, have whatever notices it run `topo inbox TEXT` instead. Each batch is a turn of yours, so watch only what the person asked for, at the pace they asked.
+
     A call to a device waits up to a minute for it. The phone answers at once while Topo is open on it, and otherwise when the system wakes it; a call nothing claimed is cancelled and never runs late, and `topo` says so. Tell the person plainly when the phone did not answer.
     """
 

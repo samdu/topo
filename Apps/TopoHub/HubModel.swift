@@ -96,6 +96,8 @@ final class HubModel {
     private let portMapping = HubPortMapping()
     /// The mind's `topo` (`HubTools`), on the loopback.
     private var tools: ToolService?
+    /// The sources the mind has asked to be watched, run and told to it in batches (`InboxService`).
+    private var inbox: InboxService?
     private var nudgeKeySaved = false
     /// The kind of the last failure to save the key's record, while it is not saved.
     private(set) var nudgeKeyFailure: String?
@@ -453,6 +455,16 @@ final class HubModel {
                                  config: mindConfiguration.configDirectory ?? mindConfiguration.stateDirectory)
             tools = service
             Self.log.notice("hub tools on \(port)")
+            let watching = InboxService(
+                root: mindRoot, directory: mindConfiguration.workingDirectory,
+                environment: NativeBrain.environment(for: mindConfiguration),
+                ready: { [weak self] in
+                    guard let snapshot = await self?.hubMind?.snapshot() else { return false }
+                    return snapshot.holds && snapshot.phase == .answering
+                },
+                deliver: { [weak self] text in await self?.hubMind?.hear(text) ?? false })
+            await watching.start()
+            inbox = watching
         }
         if hubMind == nil {
             makeMind(endpoint: endpoints.first)
