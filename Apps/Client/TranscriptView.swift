@@ -203,6 +203,11 @@ struct TurnRow: View {
 
     private var mine: Bool { turn.role == .person }
     private var stopped: Bool { mine && askAgain != nil }
+    /// The batch of a turn the hub's inbox sent (`Inbox.batch`): drawn folded to its first line
+    /// under a label, and opened by a tap, since it is what the mind was told and not what the
+    /// person said. Nil for every other turn.
+    private var batch: String? { mine ? Inbox.batch(in: turn.text) : nil }
+    @State private var open = false
 
     /// What the words are drawn on. The view chooses the side and the look chooses everything
     /// drawn on it, Topo's side included, which is why there is no number here.
@@ -213,7 +218,25 @@ struct TurnRow: View {
 
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
-            enclosed
+            if batch != nil {
+                Text("INBOX")
+                    .font(look.transcript.labelFont)
+                    .foregroundStyle(look.transcript.caption)
+                    .padding(.horizontal, enclosure.horizontalPadding)
+            }
+            if let batch {
+                enclosed
+                    .contentShape(Rectangle())
+                    .onTapGesture { open.toggle() }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint(open ? "Folds the inbox batch" : "Opens the inbox batch")
+                Label(open ? "fold" : Inbox.size(of: batch), systemImage: open ? "chevron.up" : "chevron.down")
+                    .font(look.transcript.labelFont)
+                    .foregroundStyle(look.transcript.caption)
+                    .padding(.horizontal, enclosure.horizontalPadding)
+            } else {
+                enclosed
+            }
             Text(turn.at, format: .dateTime.hour().minute())
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
@@ -273,7 +296,11 @@ struct TurnRow: View {
     /// short line is room for Topo.
     @ViewBuilder
     private var words: some View {
-        if mine {
+        if let batch {
+            PersonWords(text: open ? batch : (batch.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? batch),
+                        bare: bare)
+                .lineLimit(open ? nil : 1)
+        } else if mine {
             PersonWords(text: turn.text, bare: bare)
         } else {
             MarkdownText(source: turn.text, bare: bare, reply: turn.ref, cue: cue)

@@ -13,6 +13,22 @@ public enum Inbox {
     \(nothing) and nothing else.]
     """
 
+    /// The batch a turn's text carries when the inbox sent it (`text` begins with the heading),
+    /// without the heading; nil for any other turn. What a transcript draws folded, as input to
+    /// the conversation and not the person's words.
+    public static func batch(in text: String) -> String? {
+        guard text.hasPrefix(heading) else { return nil }
+        return String(text.dropFirst(heading.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What a folded batch says it holds: its lines, or its words when it is one line.
+    public static func size(of batch: String) -> String {
+        let lines = batch.split(separator: "\n", omittingEmptySubsequences: true).count
+        if lines > 1 { return "\(lines) lines" }
+        let words = batch.split(whereSeparator: \.isWhitespace).count
+        return words == 1 ? "1 word" : "\(words) words"
+    }
+
     /// Whether `reply` says a batch held nothing for the person.
     public static func isNothing(_ reply: String) -> Bool {
         reply.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).uppercased() == nothing

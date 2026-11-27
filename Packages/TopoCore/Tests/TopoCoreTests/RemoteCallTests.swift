@@ -80,3 +80,12 @@ private actor Counter {
         }
     }
 }
+
+@Suite struct InboxTests {
+    @Test func aBatchIsReadFromATurnTheInboxSentAndFromNoOther() {
+        #expect(Inbox.batch(in: Inbox.heading + "\n\nCalendar: dentist at 3.\nMail: two new.") == "Calendar: dentist at 3.\nMail: two new.")
+        #expect(Inbox.batch(in: "What is in my inbox?") == nil)
+        #expect(Inbox.size(of: "a\nb\n\nc") == "3 lines")
+        #expect(Inbox.size(of: "one two three") == "3 words")
+    }
+}
