@@ -317,7 +317,7 @@ release_device() {
         echo "==> $udid is left booted for the runs using it:"
         printf '%s\n' "$users" | sed 's/^/      /'
       elif timeout 120 xcrun simctl shutdown "$udid" 7>&- >/dev/null 2>&1; then
-        echo "==> $udid is shut down; its iCloud sign-in ends with it, and the next --send renews it"
+        echo "==> $udid is shut down; its iCloud sign-in ends with it, and the next --send fails until --sign-in --renew"
       else
         echo "==> $udid would not shut down; the janitor tries again once it has stood idle"
       fi
