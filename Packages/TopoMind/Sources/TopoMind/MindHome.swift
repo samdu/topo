@@ -16,14 +16,16 @@ public enum MindHome {
             .appending(path: "Library/Application Support/Topo Hub", directoryHint: .isDirectory)
     }
 
+    /// Where the hub puts the mind's own commands (`topo`), first on its path.
+    public static var bin: URL { root.appending(path: "bin", directoryHint: .isDirectory) }
     public static var work: URL { root.appending(path: "home", directoryHint: .isDirectory) }
     public static var config: URL { root.appending(path: "claude", directoryHint: .isDirectory) }
 
-    /// What the Bash tool finds commands on: Homebrew's two prefixes, the user's own `~/.local/bin`
+    /// What the Bash tool finds commands on: the hub's own (`bin`), Homebrew's two prefixes, the user's own `~/.local/bin`
     /// (where Claude Code's installer puts `claude`), then the system's.
     public static var path: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "\(home)/.local/bin",
+        return [bin.path, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "\(home)/.local/bin",
                 "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
     }
 

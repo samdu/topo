@@ -58,6 +58,11 @@ final class TopoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
             await handler()
             return .newData
         }
+        // A hub's call for this phone, or its alert, which wakes the same read of the slot.
+        if let via = RemotePushes.kind(userInfo) {
+            await RemoteCallRunner.shared.check(via: via)
+            return .newData
+        }
         return .noData
     }
 

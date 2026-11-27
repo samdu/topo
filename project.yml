@@ -646,6 +646,9 @@ targets:
       - package: TopoLink
       - package: TopoTurn
       - package: TopoMind
+      # The tool service the mind's `topo` calls (HubTools).
+      - package: TopoProxy
+        product: TopoTools
     # XcodeGen writes this file from these properties on every generate.
     entitlements:
       path: Apps/TopoHub/TopoHub.entitlements

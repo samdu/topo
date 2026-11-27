@@ -75,6 +75,7 @@
 		1A0B641FE35F787F0831F447 /* PhononVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02F3535C220E9BCA0166F365 /* PhononVoiceTests.swift */; };
 		1A33BCD1660B5B04E7A3DBE6 /* TurnImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAC35DB025A892998B944C54 /* TurnImageTests.swift */; };
 		1AC3F2C25541D9EE00858132 /* BundleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB59A7CE1943BEFADBA9F296 /* BundleStore.swift */; };
+		1B3F00A031C733A3AA32860D /* RemoteCallRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29F310E2CCDC24334EA6B4EB /* RemoteCallRunner.swift */; };
 		1B7B2F193C4455E96A95552E /* TopoTurn in Frameworks */ = {isa = PBXBuildFile; productRef = FE39E35328B7F68962D1C4D7 /* TopoTurn */; };
 		1B8DBB5A70457082D6843E1F /* FirstRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAA62817ACBB2D81A716AAF2 /* FirstRun.swift */; };
 		1B9E9CB9DD780A0C56591B99 /* NextTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168BFCB3EC9C31AD43D68959 /* NextTurn.swift */; };
@@ -339,6 +340,7 @@
 		75933F4FB9AD162EEB01484F /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32589879904BE38084A9C102 /* ShareSheet.swift */; };
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76617C5CB68EFA3B14BBFE2E /* ContinuedTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75BC358249A62CCF446E0F8 /* ContinuedTurnTests.swift */; };
+		7695D80B3970D3FD9FB67245 /* HubTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8697C01B03B7924F40186B92 /* HubTools.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		777229898D028852579EC681 /* ActivityDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833FF800AF0B74BA2F57AC39 /* ActivityDocument.swift */; };
 		77877FC67766FC00F446FC85 /* licence-mit-nom.txt in Resources */ = {isa = PBXBuildFile; fileRef = 858B4313326A782140396AD3 /* licence-mit-nom.txt */; };
@@ -444,6 +446,7 @@
 		9A6A272C199B9F948A772E1B /* TrackerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000D0D9322C088B22C4A18C6 /* TrackerView.swift */; };
 		9A80EB5F9761BF3F2287D2D8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A03D6163E6AC87912A0A8E /* SettingsView.swift */; };
 		9A8BD78984E162959CE2F6FD /* MapsToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C412163D6089D2EB33C5B57 /* MapsToolTests.swift */; };
+		9B5D98DD754C70FAB659A9E8 /* TopoTools in Frameworks */ = {isa = PBXBuildFile; productRef = AE3BF7BDB055424FF3ECEA24 /* TopoTools */; };
 		9C3DBAD81CD9FEC783B43859 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A92EDFAF7BC94A3837BE8C2F /* LICENSE */; };
 		9C4656ACA5CED95740060C72 /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
 		9D909CDBAEEC40672804C4FE /* ScreenWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996EA9E8F3A45CAAB86EE482 /* ScreenWatch.swift */; };
@@ -931,6 +934,7 @@
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		297C1A9489C88545BA87293C /* SurfaceProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceProvider.swift; sourceTree = "<group>"; };
 		298FDE8CC7D56E29362B03B2 /* QuietLaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuietLaneTests.swift; sourceTree = "<group>"; };
+		29F310E2CCDC24334EA6B4EB /* RemoteCallRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCallRunner.swift; sourceTree = "<group>"; };
 		2A7259DEDF9EF03D753FD7C8 /* MascotSwim.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotSwim.swift; sourceTree = "<group>"; };
 		2ADD17EC1DEAEE3B3868E09D /* LeakCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeakCheckTests.swift; sourceTree = "<group>"; };
 		2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoPlacementTests.swift; sourceTree = "<group>"; };
@@ -1095,6 +1099,7 @@
 		84E8FFDC241EE10C721569CE /* LocationTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationTool.swift; sourceTree = "<group>"; };
 		8577102730419D766EDC06A5 /* PressGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressGestureTests.swift; sourceTree = "<group>"; };
 		858B4313326A782140396AD3 /* licence-mit-nom.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "licence-mit-nom.txt"; sourceTree = "<group>"; };
+		8697C01B03B7924F40186B92 /* HubTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubTools.swift; sourceTree = "<group>"; };
 		8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeeping.swift; sourceTree = "<group>"; };
 		87C17BE688DD21C46E7D3630 /* ProgressTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressTracker.swift; sourceTree = "<group>"; };
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
@@ -1376,6 +1381,7 @@
 				9033B137D8B8028A45CDB059 /* TopoLink in Frameworks */,
 				7CAD541097EC82CA2970AB43 /* TopoTurn in Frameworks */,
 				0F1EBF8B507A94C7810D3587 /* TopoMind in Frameworks */,
+				9B5D98DD754C70FAB659A9E8 /* TopoTools in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1482,6 +1488,7 @@
 				D5D8E5964C0B2E93432931EE /* OnePassword.swift */,
 				9821C547C8C88D0A2C6D265A /* PerfRun.swift */,
 				A13F9AE93C3E845523DBEA78 /* RecordRoute.swift */,
+				29F310E2CCDC24334EA6B4EB /* RemoteCallRunner.swift */,
 				B1FECB130A1FD32EF317BD69 /* ScreenShareSection.swift */,
 				99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */,
 				C6F7B81335EA2A24DA1EBA7C /* ShortcutIntents.swift */,
@@ -1614,6 +1621,7 @@
 				8809A0CAEB64B3D22525D3DD /* HubModel.swift */,
 				7D9E3B6B10DA053C8B6FE8DA /* HubPortMapping.swift */,
 				7DAF4F582AA9DEC3750965B0 /* HubPush.swift */,
+				8697C01B03B7924F40186B92 /* HubTools.swift */,
 				B2F92FDD0A90790863EA800E /* Info.plist */,
 				11800CD3827F773B71C8B1B7 /* QRImage.swift */,
 				631F54F3CC1F646736B81799 /* SurfacePages.swift */,
@@ -2256,6 +2264,7 @@
 				05964D437C17D363B9B1006F /* TopoLink */,
 				69FF2DA7C1EAA87E6FD7BA22 /* TopoTurn */,
 				B2EC1288DD8D6AD08AB86133 /* TopoMind */,
+				AE3BF7BDB055424FF3ECEA24 /* TopoTools */,
 			);
 			productName = TopoHub;
 			productReference = BE9C965D7E36544A4F9526C9 /* TopoHub.app */;
@@ -3027,6 +3036,7 @@
 				826779FB38E9EDF80785009F /* HubModel.swift in Sources */,
 				DD18271C41283DB8859EB52F /* HubPortMapping.swift in Sources */,
 				AA35BFC7CCB9C02ED424A310 /* HubPush.swift in Sources */,
+				7695D80B3970D3FD9FB67245 /* HubTools.swift in Sources */,
 				57A02AD74FF8C5FD0E586035 /* Look.swift in Sources */,
 				3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */,
 				3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */,
@@ -3461,6 +3471,7 @@
 				CB95DF525A42DFB75D528726 /* PrimaryReader.swift in Sources */,
 				6B5E30F6D972C39EFEC872C9 /* ProgressTracker.swift in Sources */,
 				21E0D3118978AEFF4D34991B /* RecordRoute.swift in Sources */,
+				1B3F00A031C733A3AA32860D /* RemoteCallRunner.swift in Sources */,
 				815C061D9BB10A6B9FFCEB3B /* RoleSelector.swift in Sources */,
 				1BEC39172B57A4B26C11F530 /* RootView.swift in Sources */,
 				372127583C36D4B8503AF498 /* ScreenSampler.swift in Sources */,
@@ -4581,6 +4592,10 @@
 		95E782B5900703B64F828B86 /* PhononTTS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PhononTTS;
+		};
+		AE3BF7BDB055424FF3ECEA24 /* TopoTools */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TopoTools;
 		};
 		AF1BDBBDAB883F52D9800C0C /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -134,8 +134,13 @@ struct TopoApp: App {
         // for none of this: its send was over when the turn was saved. A refusal is kept and never
         // asked again; the hub then finds the turn by its poll and push.
         let nudgeRecords = AppRecords.database()
+        RemoteCallRunner.shared.install(tools: GuestResident.shared.toolTable, database: nudgeRecords)
         harness.nudge = { lease, mark, frames in
             guard let endpoint = lease.endpoint, let (_, port) = HubNudge.hostAndPort(endpoint) else { return false }
+            // While the hub answers, its mind may ask this phone for a tool.
+            let waiting = NudgeWaits.shared.begin()
+            await MainActor.run { RemoteCallRunner.shared.watch(while: { NudgeWaits.shared.isWaiting }) }
+            defer { NudgeWaits.shared.end(waiting) }
             let answer = await HubNudge.send(for: lease, mark: mark, keys: .shared, in: nudgeRecords, reachable: { host, _ in
                 let state = await LocalNetworkAccess.shared.askForHub(host: host, port: port)
                 guard state == .allowed else {
@@ -353,11 +358,13 @@ struct TopoApp: App {
             // the acceleration, so it is not the screen's to report.
             .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
+                RemoteCallRunner.shared.follow(signedIn: phase == .signedIn)
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
                 controlDefaults.follow(from: was, to: phase)
                 shares.follow(from: was, to: phase, guestIsHere: roleSelector.role == .primary)
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
+                Task { await RemotePushes.ensureSubscriptions() }
                 // What the watch is owed of the slots: a sign-out's deletes, then any record
                 // behind its file.
                 Task { await SurfaceSync.shared.flush() }
@@ -378,6 +385,8 @@ struct TopoApp: App {
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Perf.mark("scene.active")
+                    // A hub's call written while Topo was away, if it is still in time.
+                    Task { await RemoteCallRunner.shared.check(via: "front") }
                     Task { await widgetCues.drain() }
                     // An activity past its until goes; the rest are polled again.
                     Task { await ActivityKeeper.shared.resume() }

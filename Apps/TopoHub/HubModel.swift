@@ -10,6 +10,7 @@ import TopoCore
 import TopoCoreTesting
 import TopoLink
 import TopoMind
+import TopoTools
 import TopoTurn
 
 /// The hub's standing state: its own device record, the probe listener that
@@ -91,6 +92,8 @@ final class HubModel {
     private var nudgeKey: NudgeKey?
     /// The router's public port onto the nudge's channel, for a phone off the home network.
     private let portMapping = HubPortMapping()
+    /// The mind's `topo` (`HubTools`), on the loopback.
+    private var tools: ToolService?
     private var nudgeKeySaved = false
     /// The kind of the last failure to save the key's record, while it is not saved.
     private(set) var nudgeKeyFailure: String?
@@ -419,6 +422,23 @@ final class HubModel {
             id: device, name: name, kind: .mac, publicKey: try HubIdentity.publicKey(),
             endpoints: endpoints, registeredAt: Date(), seenAt: Date()))
         pairingCode = PairingCode(record)
+        if tools == nil, store == .cloudKit {
+            let directory = directory
+            let everyDevice: @Sendable () async -> [Device] = { (try? await directory.all()) ?? [] }
+            let token = ToolService.newToken()
+            let service = try ToolService(tools: [
+                DeviceTool(hub: device, database: database, devices: everyDevice, alertAfter: {
+                    UserDefaults.standard.object(forKey: "call.alertAfter") as? Double ?? 6
+                }),
+                AlertTool(hub: device, database: database),
+                DevicesTool(devices: everyDevice),
+            ], token: token, bound: .seconds(190))
+            let port = try await service.start()
+            try HubTools.install(port: port, token: token, root: mindRoot,
+                                 config: mindConfiguration.configDirectory ?? mindConfiguration.stateDirectory)
+            tools = service
+            Self.log.notice("hub tools on \(port)")
+        }
         if hubMind == nil {
             makeMind(endpoint: endpoints.first)
             await sayAsALimb()
