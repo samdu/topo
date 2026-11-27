@@ -7,7 +7,7 @@ import XCTest
 /// under a turn on its way and under the row's own words, while nothing is drawn below it; and
 /// the row's work drawn once, under the log's turn once the log has it.
 @MainActor
-final class TranscriptEndTests: XCTestCase {
+final class WorkRowEndTests: XCTestCase {
     private let step = [WorkStep(id: "s", kind: .thought(text: nil))]
 
     func testTheNewestPersonsTurnWithWorkEndsAtItsWork() throws {
