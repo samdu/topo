@@ -123,12 +123,40 @@ enum AlertPush {
     }
 }
 
+/// A reply the hub's mind saved, shown by the system as an alert on every device of the Apple ID
+/// that has Topo away from the front; with Topo in front the reply is on the screen and the
+/// alert is not presented (`TopoAppDelegate`'s `willPresent`).
+enum ReplyPush {
+    static let subscriptionID = "reply-said"
+
+    static func subscription() -> CKQuerySubscription {
+        let subscription = CKQuerySubscription(
+            recordType: RemoteAlert.Kind.reply.recordType, predicate: NSPredicate(format: "sequence > 0"),
+            subscriptionID: subscriptionID, options: [.firesOnRecordCreation, .firesOnRecordUpdate])
+        subscription.zoneID = TopoCloudKit.zoneID
+        let info = CKSubscription.NotificationInfo()
+        info.titleLocalizationKey = "%1$@"
+        info.titleLocalizationArgs = ["title"]
+        info.alertLocalizationKey = "%1$@"
+        info.alertLocalizationArgs = ["body"]
+        info.soundName = "default"
+        subscription.notificationInfo = info
+        return subscription
+    }
+
+    /// Whether a notification about to be presented is a reply's.
+    static func isReply(_ userInfo: [AnyHashable: Any]) -> Bool {
+        CKNotification(fromRemoteNotificationDictionary: userInfo)?.subscriptionID == subscriptionID
+    }
+}
+
 enum RemotePushes {
     /// Registers both subscriptions unless this Apple ID has them. A failure costs the pushes only.
     static func ensureSubscriptions() async {
         guard await AppRecords.isCloudKit() else { return }
         let database = CKContainer(identifier: TopoCloudKit.containerIdentifier).privateCloudDatabase
-        for (id, make) in [(CallPush.subscriptionID, CallPush.subscription), (AlertPush.subscriptionID, AlertPush.subscription)] {
+        for (id, make) in [(CallPush.subscriptionID, CallPush.subscription), (AlertPush.subscriptionID, AlertPush.subscription),
+                           (ReplyPush.subscriptionID, ReplyPush.subscription)] {
             do {
                 _ = try await database.subscription(for: id)
             } catch let error as CKError where error.code == .unknownItem {

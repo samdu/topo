@@ -74,6 +74,8 @@ final class HubModel {
     let mindRoot: URL
 
     nonisolated static let modelKey = "model"
+    /// Whether each reply is also sent to the person's devices as a notification; on unless set false.
+    nonisolated static let replyPushKey = "reply.push"
     nonisolated static let streamKey = "stream.replies"
     /// The switch as the defaults hold it, read off the main actor by each nudge: on unless set off.
     nonisolated static var streamsNow: Bool { UserDefaults.standard.object(forKey: streamKey) as? Bool ?? true }
@@ -499,6 +501,18 @@ final class HubModel {
             login: { await MindLogin.check(configuration) },
             prepare: { try MindHome.prepare(work: work, config: config) },
             model: { UserDefaults.standard.string(forKey: HubModel.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default },
+            replied: { [database, device, store] reply in
+                // The reply's opening, as a notification on the person's devices: a device with
+                // Topo in front shows the reply itself and no banner (`ReplyPush`).
+                guard store == .cloudKit, UserDefaults.standard.object(forKey: HubModel.replyPushKey) as? Bool ?? true,
+                      let alert = RemoteAlert.reply(reply.text, from: device) else { return }
+                do {
+                    try await alert.save(to: database)
+                    Perf.mark("hub.reply.alert.saved")
+                } catch {
+                    Perf.mark("hub.reply.alert.failed")
+                }
+            },
             observe: { [weak self] snapshot in
                 Task { @MainActor in
                     guard let self else { return }

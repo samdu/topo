@@ -23,7 +23,8 @@ final class TopoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     /// come here.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
         async -> UNNotificationPresentationOptions {
-        Self.inFront
+        // A reply's alert with Topo in front: the reply is on the screen.
+        ReplyPush.isReply(notification.request.content.userInfo) ? [] : Self.inFront
     }
 
     /// How a notification that comes due with the app in front is shown.

@@ -122,6 +122,8 @@ public actor HubMind {
     private let clock = PassClock()
     /// The reply being written, for the phones whose nudge asked for it (`nudge`).
     private let cast = ReplyCast()
+    /// Told each reply once it is in the log.
+    private let replied: @Sendable (Turn) async -> Void
     /// Internal for the suites, which read what it holds after a stop.
     let lease: PrimaryLease
     private let log: TurnLog
@@ -183,7 +185,9 @@ public actor HubMind {
                 comingBound: Duration = HubMind.standardComingBound,
                 leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
                 pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+                replied: @escaping @Sendable (Turn) async -> Void = { _ in },
                 observe: @escaping @Sendable (Snapshot) -> Void = { _ in }) {
+        self.replied = replied
         let timedDatabase = TimedDatabase(base: database, clock: clock)
         self.database = timedDatabase
         self.device = device
@@ -658,9 +662,11 @@ public actor HubMind {
                     return heard
                 }
             }
-            outcome = try await runner.answerPending(since: mark, choosingFrom: { Self.chosen(said: $0, picker: picker) },
-                                                     coming: waiting) == nil
-                ? .nothing : .answered
+            let reply = try await runner.answerPending(since: mark, choosingFrom: { Self.chosen(said: $0, picker: picker) },
+                                                       coming: waiting)
+            outcome = reply == nil ? .nothing : .answered
+            // Told off the pass, which does not wait on it.
+            if let reply { Task { [replied] in await replied(reply) } }
         } catch TurnRunnerError.notPrimary {
             outcome = .elsewhere
         } catch TurnRunnerError.displaced {

@@ -187,15 +187,44 @@ public enum RemoteCalls {
 /// Words a hub's mind has for the person, shown by the system on every device of the Apple ID
 /// that subscribes (`AlertPush` in the app): one record a hub, `alert/<hub>`, written over each
 /// time. The push's alert is the record's `title` and `body`; no device runs anything to show it.
+///
+/// A reply the mind has saved is said the same way in a record of its own kind (`Kind.reply`,
+/// `ReplyPush`), so a device with Topo in front, which shows the reply itself, can tell it from
+/// words the mind chose to send and show no banner for it.
 public struct RemoteAlert: Sendable, Equatable {
-    public static let recordType = "Alert"
-    public static func recordID(for hub: DeviceID) -> RecordID { RecordID("alert/\(hub.rawValue)") }
+    public enum Kind: Sendable {
+        /// Words the mind sent (`topo notify`), and the louder wake of a call.
+        case said
+        /// The opening of a reply just saved to the log.
+        case reply
+
+        public var recordType: String { self == .said ? "Alert" : "ReplyAlert" }
+        func recordID(for hub: DeviceID) -> RecordID {
+            RecordID((self == .said ? "alert/" : "reply-alert/") + hub.rawValue)
+        }
+    }
+
+    public static let recordType = Kind.said.recordType
+    public static func recordID(for hub: DeviceID) -> RecordID { Kind.said.recordID(for: hub) }
+    /// How much of a reply its alert carries: what a banner and a lock screen show.
+    public static let replyLimit = 300
     public static let titleLimit = 120
     public static let bodyLimit = 1_000
 
     public var hub: DeviceID
     public var title: String
     public var body: String
+    public var kind = Kind.said
+
+    /// The alert for a reply the mind saved: its opening words.
+    public static func reply(_ text: String, from hub: DeviceID) -> RemoteAlert? {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return nil }
+        var alert = RemoteAlert(hub: hub, title: "Topo",
+                                body: words.count > replyLimit ? String(words.prefix(replyLimit)) + "…" : words)
+        alert.kind = .reply
+        return alert
+    }
 
     public init(hub: DeviceID, title: String, body: String) {
         self.hub = hub
@@ -206,8 +235,8 @@ public struct RemoteAlert: Sendable, Equatable {
     /// Writes the alert over the hub's record, whatever it held: the hub is its only writer.
     public func save(to database: any RecordDatabase, at: Date = Date()) async throws {
         for _ in 0..<3 {
-            let current = try await database.fetch(Self.recordID(for: hub))
-            let record = Record(type: Self.recordType, id: Self.recordID(for: hub), fields: [
+            let current = try await database.fetch(kind.recordID(for: hub))
+            let record = Record(type: kind.recordType, id: kind.recordID(for: hub), fields: [
                 "hub": .string(hub.rawValue), "title": .string(title), "body": .string(body),
                 "at": .date(at), "sequence": .int(1),
             ], changeTag: current?.changeTag)
