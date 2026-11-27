@@ -59,4 +59,29 @@ final class TurnWorkTests: XCTestCase {
         XCTAssertTrue(work.steps.isEmpty)
         XCTAssertNil(work.live)
     }
+
+    /// The recorded tool turn, line by line through the parser into the work: every call of the
+    /// turn's own, each with the outcome its result gave it.
+    func testTheRecordedToolTurnBecomesItsCallsWithTheirOutcomes() throws {
+        // the parser's own recording, read where it is checked in: a simulator reads the Mac's disk
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../Packages/TopoUserland/Tests/StreamJSON/tool-turn.jsonl").standardized
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
+        let work = TurnWork()
+        run(work, heard: "n1", lines.flatMap(StreamJSON.events(in:)))
+        let calls = (work.steps["n1"] ?? []).filter(\.isCall)
+        XCTAssertEqual(calls.count, 6)
+        XCTAssertTrue(calls.allSatisfy { $0.outcome != nil }, "a call with no outcome: \(calls.filter { $0.outcome == nil }.map(\.id))")
+    }
+
+    func testTheOldestTurnsGoPastTheBudgetButNeverTheLiveOne() {
+        let work = TurnWork()
+        let big = String(repeating: "x", count: TurnWork.budget / 2 + 1)
+        run(work, heard: "old", [.thought(big)])
+        run(work, heard: "live", [.thought(big)])
+        XCTAssertNil(work.steps["old"])
+        XCTAssertNotNil(work.steps["live"])
+        run(work, heard: "live", [.thought(big), .thought(big)])
+        XCTAssertEqual(work.steps["live"]?.count, 2, "the live turn is not dropped from under itself")
+    }
 }

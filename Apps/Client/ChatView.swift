@@ -582,7 +582,7 @@ struct ChatView: View {
                                   actions: turnActions,
                                   draft: draft, queued: queued, line: lineActions, stopped: harness.repliesStopped,
                                   answer: row.answer(in: harness), cue: speaker.cue,
-                                  work: shownWork, liveWork: work?.live, rowNonce: row.sent)
+                                  work: shownWork, liveWork: work?.live, rowNonce: row.sent.flatMap { harness.said($0) ? nil : $0 })
             // Until the first read of the log returns, the empty page says it is being read. A
             // read that failed says so in the bar, and the loop's next pass reads again.
             .overlay {

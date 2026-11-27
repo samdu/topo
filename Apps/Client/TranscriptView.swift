@@ -115,6 +115,8 @@ struct TranscriptView: View {
             // A reply the guest wrote ahead of iCloud arrives under words already drawn.
             .onChange(of: end) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: unsavedWords) { _, _ in scroll(proxy, animated: true) }
+            // The live turn's work grows under the newest turn before any word of the reply.
+            .onChange(of: liveWork.flatMap { work[$0]?.count }) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
@@ -302,7 +304,7 @@ extension TranscriptView {
     @ViewBuilder fileprivate func workRow(_ nonce: String) -> some View {
         #if os(iOS)
         if let steps = work[nonce], !steps.isEmpty {
-            WorkRow(steps: steps, live: liveWork == nonce).id("work-\(nonce)")
+            WorkRow(steps: steps, live: liveWork == nonce).mascotObstacle().id("work-\(nonce)")
         }
         #endif
     }

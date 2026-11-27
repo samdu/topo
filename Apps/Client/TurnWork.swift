@@ -60,6 +60,10 @@ final class TurnWork {
     /// The turns kept, newest last; the oldest goes past `keep`.
     private var order: [String] = []
     static let keep = 40
+    /// The most characters of steps kept across every turn: past it the oldest turns go, never
+    /// the live one, since a turn can make any number of steps of up to 96K characters each.
+    static let budget = 4_000_000
+    private var sizes: [String: Int] = [:]
 
     #if os(iOS)
     /// Which turn a guest turn answers, by the refs it names: the harness's turns know their
@@ -96,13 +100,16 @@ final class TurnWork {
         switch event {
         case .thought(let text):
             steps[nonce, default: []].append(WorkStep(id: "\(nonce)-\(steps[nonce]?.count ?? 0)", kind: .thought(text: text)))
+            grew(nonce, by: text?.count ?? 0)
         case .toolInput(let id, let name, let summary, let input):
             steps[nonce, default: []].append(WorkStep(id: id, kind: .call(name: name, summary: summary, input: input)))
+            grew(nonce, by: input.count + summary.count)
         case .toolResult(let isError, let text, let id?):
             guard var list = steps[nonce], let i = list.firstIndex(where: { $0.id == id && $0.isCall }) else { return }
             list[i].outcome = .init(ok: !isError, bytes: text.utf8.count,
                                     text: ToolStep.cap(text, ToolStep.resultMax).text)
             steps[nonce] = list
+            grew(nonce, by: list[i].outcome?.text.count ?? 0)
         default:
             break
         }
@@ -112,15 +119,31 @@ final class TurnWork {
     /// A turn begun again (an answer asked for again) starts its steps again.
     func begin(_ nonce: String) {
         steps[nonce] = []
+        sizes[nonce] = 0
         order.removeAll { $0 == nonce }
         order.append(nonce)
-        while order.count > Self.keep { steps[order.removeFirst()] = nil }
+        while order.count > Self.keep { drop(order.removeFirst()) }
+    }
+
+    /// Counts what a turn's steps hold, and lets the oldest turns go past the budget.
+    func grew(_ nonce: String, by characters: Int) {
+        sizes[nonce, default: 0] += characters
+        while sizes.values.reduce(0, +) > Self.budget, let oldest = order.first(where: { $0 != live }) {
+            order.removeAll { $0 == oldest }
+            drop(oldest)
+        }
+    }
+
+    private func drop(_ nonce: String) {
+        steps[nonce] = nil
+        sizes[nonce] = nil
     }
 
     /// Everything, at the end of a login.
     func forget() {
         steps = [:]
         order = []
+        sizes = [:]
         live = nil
     }
 
