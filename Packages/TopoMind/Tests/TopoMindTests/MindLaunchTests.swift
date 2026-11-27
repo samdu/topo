@@ -11,6 +11,13 @@ import Testing
         #expect(taken == ["--channels", "buddy-inbox", "--add-dir", "/tmp/x"])
     }
 
+    @Test func developmentChannelsComeLastEachNameAnArgument() {
+        let taken = MindLaunch.arguments(from: [
+            "--dangerously-load-development-channels", "server:buddy-inbox server:other --model", "--add-dir", "/tmp/x",
+        ])
+        #expect(taken == ["--add-dir", "/tmp/x", "--dangerously-load-development-channels", "server:buddy-inbox", "server:other"])
+    }
+
     @Test func aMissingOrMisshapenFileAddsNothing() throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "launch-\(UUID().uuidString).json")
         #expect(MindLaunch.arguments(at: file).isEmpty)

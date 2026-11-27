@@ -13,7 +13,11 @@ public enum MindLaunch {
     public static let fileName = "launch.json"
     /// Flags the document may add, each taking one value.
     public static let allowed: Set<String> = ["--channels", "--mcp-config", "--add-dir", "--append-system-prompt",
-                                              "--plugin-dir", "--settings"]
+                                              "--plugin-dir", "--settings", developmentChannels]
+    /// Claude Code's flag for channels that are not on its approved list, the person's own among
+    /// them. It takes several names (`server:buddy-inbox plugin:name@marketplace`), given here as
+    /// one value with spaces between, and has to come last, since it takes every argument after it.
+    public static let developmentChannels = "--dangerously-load-development-channels"
     public static let valueLimit = 8_000
     public static let pairLimit = 16
 
@@ -29,6 +33,7 @@ public enum MindLaunch {
 
     static func arguments(from listed: [String]) -> [String] {
         var taken: [String] = []
+        var channels: [String] = []
         var index = 0
         while index < listed.count, taken.count < pairLimit * 2 {
             let flag = listed[index]
@@ -37,8 +42,12 @@ public enum MindLaunch {
             index += 2
             // A value that reads as a flag would be one the document may not set.
             guard !value.isEmpty, !value.hasPrefix("-"), value.count <= valueLimit else { continue }
-            taken += [flag, value]
+            if flag == developmentChannels {
+                channels += value.split(whereSeparator: \.isWhitespace).map(String.init).filter { !$0.hasPrefix("-") }
+            } else {
+                taken += [flag, value]
+            }
         }
-        return taken
+        return channels.isEmpty ? taken : taken + [developmentChannels] + channels
     }
 }
