@@ -1,4 +1,6 @@
 import TopoCore
+import TopoCoreTesting
+import TopoTurn
 import TopoUserland
 import XCTest
 
