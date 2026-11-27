@@ -21,7 +21,8 @@ final class WorkRowTests: XCTestCase {
         closed.tap()
         let bash = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "Compare with last week's log")).firstMatch
         XCTAssertTrue(bash.waitForExistence(timeout: 10), "the open row's line for the Bash call")
-        XCTAssertFalse(app.staticTexts["COMMAND"].exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "command: diff")).firstMatch.exists,
+                       "the Bash call's input is drawn before its line is opened")
         ChatReading.attach(app, "2 open", to: self)
 
         bash.tap()

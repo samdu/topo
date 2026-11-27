@@ -48,12 +48,15 @@ public enum ToolStep {
         }.joined(separator: "\n")
     }
 
-    /// `text` within `max` characters, head and tail kept, and whether a middle was cut.
+    /// `text` within `max` characters, the note of the cut included: three quarters of what is
+    /// kept from its head, a quarter from its tail, and whether a middle was cut.
     public static func cap(_ text: String, _ max: Int) -> (text: String, cut: Bool) {
-        guard text.count > max else { return (text, false) }
-        let head = max * 3 / 4, tail = max - head
-        let gone = text.count - head - tail
-        return ("\(text.prefix(head))\n\n… \(gone) characters not kept …\n\n\(text.suffix(tail))", true)
+        let count = text.count
+        guard count > max else { return (text, false) }
+        let note = { (gone: Int) in "\n\n… \(gone) characters not kept …\n\n" }
+        let room = Swift.max(0, max - note(count).count)
+        let head = room * 3 / 4, tail = room - head
+        return ("\(text.prefix(head))\(note(count - room))\(text.suffix(tail))", true)
     }
 
     static let leading = ["file_path", "notebook_path", "path", "url", "command", "pattern", "query", "description"]

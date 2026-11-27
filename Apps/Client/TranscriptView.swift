@@ -167,14 +167,28 @@ struct TranscriptView: View {
     /// the row while it is shown, then a turn on its way said before it or its reply, then the
     /// newest turn — so a caption arriving with no keyboard is scrolled to like anything else,
     /// and neither a turn still owed below the row nor a reply the log does not hold yet is left
-    /// under the fold.
+    /// under the fold. A person's turn with a work row under it ends at the row.
     var end: AnyHashable? {
-        if let last = queued.after.last { return Self.end(of: last) }
+        if let last = queued.after.last { return end(of: last) }
         if let answer { return AnyHashable(answer.ref) }
+        if let row = workEnd(rowNonce) { return row }
         if draft?.drawer == .row { return AnyHashable(Self.draftID) }
-        if let last = queued.before.last { return Self.end(of: last) }
-        return turns.last.map { AnyHashable($0.ref) }
+        if let last = queued.before.last { return end(of: last) }
+        guard let last = turns.last else { return nil }
+        return (last.role == .person ? workEnd(last.nonce) : nil) ?? AnyHashable(last.ref)
     }
+
+    /// The work row drawn under the turn of this nonce, if one is.
+    private func workEnd(_ nonce: String?) -> AnyHashable? {
+        #if os(iOS)
+        guard let nonce, work[nonce]?.isEmpty == false else { return nil }
+        return AnyHashable(Self.workID(nonce))
+        #else
+        return nil
+        #endif
+    }
+
+    static func workID(_ nonce: String) -> String { "work-\(nonce)" }
 
     /// The words of every reply drawn below the log's turns, top to bottom: each grows as the
     /// guest writes it and moves whatever is drawn under it, so the transcript follows its end
@@ -183,8 +197,8 @@ struct TranscriptView: View {
         queued.before.compactMap { $0.reply?.text } + (answer.map { [$0.text] } ?? []) + queued.after.compactMap { $0.reply?.text }
     }
 
-    private static func end(of turn: QueuedTurn) -> AnyHashable {
-        turn.reply.map { AnyHashable($0.ref) } ?? AnyHashable(turn.id)
+    private func end(of turn: QueuedTurn) -> AnyHashable {
+        turn.reply.map { AnyHashable($0.ref) } ?? workEnd(turn.nonce) ?? AnyHashable(turn.id)
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -304,7 +318,7 @@ extension TranscriptView {
     @ViewBuilder fileprivate func workRow(_ nonce: String) -> some View {
         #if os(iOS)
         if let steps = work[nonce], !steps.isEmpty {
-            WorkRow(steps: steps, live: liveWork == nonce).mascotObstacle().id("work-\(nonce)")
+            WorkRow(steps: steps, live: liveWork == nonce).mascotObstacle().id(Self.workID(nonce))
         }
         #endif
     }

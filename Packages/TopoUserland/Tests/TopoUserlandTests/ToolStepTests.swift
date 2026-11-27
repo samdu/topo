@@ -56,5 +56,14 @@ final class ToolStepTests: XCTestCase {
         XCTAssertTrue(kept.hasSuffix("ttt"))
         XCTAssertFalse(kept.contains("MIDDLE"))
         XCTAssertFalse(ToolStep.cap("short", 80).cut)
+
+        for limit in [ToolStep.inputMax, ToolStep.resultMax] {
+            let over = String(repeating: "h", count: limit) + "MIDDLE" + String(repeating: "t", count: limit)
+            let (capped, _) = ToolStep.cap(over, limit)
+            XCTAssertLessThanOrEqual(capped.count, limit, "the note of the cut is inside the limit")
+            let heads = capped.prefix { $0 == "h" }.count, tails = capped.reversed().prefix { $0 == "t" }.count
+            XCTAssertEqual(Double(heads) / Double(heads + tails), 0.75, accuracy: 0.001, "three quarters head")
+            XCTAssertEqual(ToolStep.cap(String(repeating: "a", count: limit + 1), limit).text.count <= limit, true)
+        }
     }
 }

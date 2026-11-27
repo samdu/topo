@@ -30,13 +30,21 @@ struct WorkStep: Identifiable, Equatable, Sendable {
         switch kind {
         case .thought: return "💭"
         case .call(let name, _, _):
+            // The keeper's own kinds of tool, with the web and the shell drawn apart.
             switch name {
             case "WebSearch", "WebFetch": return "🌐"
-            case "Read", "Grep", "Glob", "LS", "NotebookRead": return "🔎"
-            case "Write", "Edit", "MultiEdit", "NotebookEdit": return "📝"
-            case "Agent", "Task": return "🤖"
             case "Bash": return "💻"
-            default: return "🧰"
+            default:
+                #if os(iOS)
+                switch KeeperSounds.tone(forTool: name) {
+                case .read: return "🔎"
+                case .write: return "📝"
+                case .delegate: return "🤖"
+                default: return "🧰"
+                }
+                #else
+                return "🧰"
+                #endif
             }
         }
     }
@@ -72,14 +80,14 @@ final class TurnWork {
 
     /// Follows the chat's guest beside Topo and the keeper's sounds: what the harness was already
     /// telling is told on, and the work hears of it after.
-    func follow(_ harness: Harness) {
+    func follow(_ harness: Harness, login: LoginLife = .shared) {
         nonceOf = { [weak harness] ref in harness?.turns.first { $0.ref == ref }?.nonce }
         let before = harness.onGuest
         harness.onGuest = { [weak self] activity in
             before?(activity)
             self?.follow(activity)
         }
-        LoginLife.shared.onEnd { [weak self] in self?.forget() }
+        login.onEnd { [weak self] in self?.forget() }
     }
 
     func follow(_ activity: GuestActivity) {
@@ -93,6 +101,7 @@ final class TurnWork {
             take(event, into: live)
         case .update(.ended), .gone:
             live = nil
+            grew(nil, by: 0)
         }
     }
 
@@ -126,8 +135,8 @@ final class TurnWork {
     }
 
     /// Counts what a turn's steps hold, and lets the oldest turns go past the budget.
-    func grew(_ nonce: String, by characters: Int) {
-        sizes[nonce, default: 0] += characters
+    func grew(_ nonce: String?, by characters: Int) {
+        if let nonce { sizes[nonce, default: 0] += characters }
         while sizes.values.reduce(0, +) > Self.budget, let oldest = order.first(where: { $0 != live }) {
             order.removeAll { $0 == oldest }
             drop(oldest)
