@@ -25,6 +25,8 @@ struct ChatView: View {
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
+    /// What the guest did before each reply this device wrote, for the transcript's work row.
+    @Environment(TurnWork.self) private var work: TurnWork?
     @AppStorage(Mute.key) private var readAloud = true
     /// The model chosen on the bar's slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
@@ -579,7 +581,8 @@ struct ChatView: View {
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
                                   draft: draft, queued: queued, line: lineActions, stopped: harness.repliesStopped,
-                                  answer: row.answer(in: harness), cue: speaker.cue)
+                                  answer: row.answer(in: harness), cue: speaker.cue,
+                                  work: shownWork, liveWork: work?.live, rowNonce: row.sent)
             // Until the first read of the log returns, the empty page says it is being read. A
             // read that failed says so in the bar, and the loop's next pass reads again.
             .overlay {
@@ -707,6 +710,18 @@ struct ChatView: View {
         guard let writing = harness.writing, !writing.isEmpty, !harness.writingAhead else { return harness.turns + behind }
         return harness.turns + behind + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
                                               nonce: "writing")]
+    }
+
+    /// What the guest did before each reply, by the person's nonce: this device's `TurnWork`, or
+    /// in a debug build launched with `TOPO_DEBUG_WORK` the fixture's steps under the fixture
+    /// transcript's last turn of the person's.
+    private var shownWork: [String: [WorkStep]] {
+        #if DEBUG
+        if let fixture = DebugRun.work(), let last = shownTurns.last(where: { $0.role == .person }) {
+            return [last.nonce: fixture]
+        }
+        #endif
+        return work?.steps ?? [:]
     }
 
     /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of

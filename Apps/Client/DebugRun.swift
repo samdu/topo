@@ -32,6 +32,7 @@ enum DebugRun {
     static let lookVariable = "TOPO_DEBUG_LOOK"
     static let softwareKeyboardVariable = "TOPO_DEBUG_SOFTWARE_KEYBOARD"
     static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
+    static let workVariable = "TOPO_DEBUG_WORK"
     static let tuningVariable = "TOPO_DEBUG_TUNING"
     static let noticesVariable = "TOPO_DEBUG_NOTICES"
     static let setupVariable = "TOPO_DEBUG_SETUP"
@@ -126,6 +127,31 @@ enum DebugRun {
         if document.isEmpty { defaults.removeObject(forKey: Tuning.key) } else { defaults.set(document, forKey: Tuning.key) }
     }
     #endif
+
+    /// `TOPO_DEBUG_WORK=steps`: the transcript's work row under the last turn of the person's
+    /// draws these steps (`ChatView.shownWork`), so the row's three depths can be opened with no
+    /// guest behind them: a thought with its text, calls that worked and one that failed, and a
+    /// result long enough to open on its sheet. Nil when the variable is absent or names none.
+    static func work(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [WorkStep]? {
+        guard environment[workVariable] == "steps" else { return nil }
+        let log = (1...60).map { "2026-11-27T09:\(String(format: "%02d", $0)):04Z warn rotating serving certificate (\($0) of 60)" }
+            .joined(separator: "\n")
+        func call(_ id: String, _ name: String, _ summary: String, _ input: String, ok: Bool, _ result: String) -> WorkStep {
+            WorkStep(id: id, kind: .call(name: name, summary: summary, input: input),
+                     outcome: .init(ok: ok, bytes: result.utf8.count, text: result))
+        }
+        return [
+            WorkStep(id: "w0", kind: .thought(text: "The person wants to know why the log doubled. Count the warnings first, then compare with last week before calling it noise.")),
+            call("w1", "Grep", "WARN|ERROR", "path: /root/work/today.log\npattern: WARN|ERROR\noutput_mode: count", ok: true, "/root/work/today.log:38"),
+            call("w2", "Bash", "Compare with last week's log",
+                 "command: diff <(grep -c WARN last-week.log) <(grep -c WARN today.log)\ndescription: Compare with last week's log",
+                 ok: false, "grep: last-week.log: No such file or directory"),
+            WorkStep(id: "w3", kind: .thought(text: nil)),
+            call("w4", "WebSearch", "certificate rotation warning", "query: certificate rotation warning", ok: true, log),
+            call("w5", "Write", "notes.md", "file_path: /root/memory/notes.md\ncontent:\nThe warnings are the scheduled certificate rotation.", ok: true,
+                 "File created successfully at: /root/memory/notes.md"),
+        ]
+    }
 
     /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left|links|blocks>`: the chat draws these fixture turns
     /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a

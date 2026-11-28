@@ -34,6 +34,22 @@ struct TranscriptView: View {
     /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
     /// pulsing by the reply it is in. Nil on a screen with no voice.
     var cue: CodeBlockCue?
+    /// What the guest did before each reply, by the nonce of the person's turn it answers
+    /// (`TurnWork`): drawn under that turn. Empty on a screen that ran no turn.
+    var work: [String: [WorkStep]] = [:]
+    /// The nonce of the turn the guest is answering now, whose row is live.
+    var liveWork: String?
+    /// The nonce of the turn the row holds, whose work is drawn between the row and its answer
+    /// until the log has the turn (`rowWork`).
+    var rowNonce: String?
+
+    /// The row's turn whose work is drawn between the row and its answer: none once a turn of the
+    /// log carries its nonce, whose own work row is drawn under it instead, so a turn's work is
+    /// drawn once.
+    var rowWork: String? {
+        guard let rowNonce, !turns.contains(where: { $0.nonce == rowNonce }) else { return nil }
+        return rowNonce
+    }
     @Environment(\.look) private var look
     /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
     /// own place, and the block waiting on its row to be made; a reference, so a row coming and
@@ -70,12 +86,14 @@ struct TranscriptView: View {
                                     askAgain: askAgain(turn)).id(turn.ref)
                                 .onAppear { made.turns.insert(turn.ref) }
                                 .onDisappear { made.turns.remove(turn.ref) }
+                            if turn.role == .person { workRow(turn.nonce) }
                         }
                     }
                     ForEach(queued.before) { queued($0) }
                     if let draft, draft.drawer == .row {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
+                    if let rowWork { workRow(rowWork) }
                     if let answer { TurnRow(turn: answer, replay: replay, actions: actions).id(answer.ref) }
                     ForEach(queued.after) { queued($0) }
                 }
@@ -106,6 +124,8 @@ struct TranscriptView: View {
             // A reply the guest wrote ahead of iCloud arrives under words already drawn.
             .onChange(of: end) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: unsavedWords) { _, _ in scroll(proxy, animated: true) }
+            // The live turn's work grows under the newest turn before any word of the reply.
+            .onChange(of: liveWork.flatMap { work[$0]?.count }) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
@@ -156,14 +176,28 @@ struct TranscriptView: View {
     /// the row while it is shown, then a turn on its way said before it or its reply, then the
     /// newest turn — so a caption arriving with no keyboard is scrolled to like anything else,
     /// and neither a turn still owed below the row nor a reply the log does not hold yet is left
-    /// under the fold.
+    /// under the fold. A person's turn with a work row under it ends at the row.
     var end: AnyHashable? {
-        if let last = queued.after.last { return Self.end(of: last) }
+        if let last = queued.after.last { return end(of: last) }
         if let answer { return AnyHashable(answer.ref) }
+        if let row = workEnd(rowWork) { return row }
         if draft?.drawer == .row { return AnyHashable(Self.draftID) }
-        if let last = queued.before.last { return Self.end(of: last) }
-        return turns.last.map { AnyHashable($0.ref) }
+        if let last = queued.before.last { return end(of: last) }
+        guard let last = turns.last else { return nil }
+        return (last.role == .person ? workEnd(last.nonce) : nil) ?? AnyHashable(last.ref)
     }
+
+    /// The work row drawn under the turn of this nonce, if one is.
+    private func workEnd(_ nonce: String?) -> AnyHashable? {
+        #if os(iOS)
+        guard let nonce, work[nonce]?.isEmpty == false else { return nil }
+        return AnyHashable(Self.workID(nonce))
+        #else
+        return nil
+        #endif
+    }
+
+    static func workID(_ nonce: String) -> String { "work-\(nonce)" }
 
     /// The words of every reply drawn below the log's turns, top to bottom: each grows as the
     /// guest writes it and moves whatever is drawn under it, so the transcript follows its end
@@ -172,8 +206,8 @@ struct TranscriptView: View {
         queued.before.compactMap { $0.reply?.text } + (answer.map { [$0.text] } ?? []) + queued.after.compactMap { $0.reply?.text }
     }
 
-    private static func end(of turn: QueuedTurn) -> AnyHashable {
-        turn.reply.map { AnyHashable($0.ref) } ?? AnyHashable(turn.id)
+    private func end(of turn: QueuedTurn) -> AnyHashable {
+        turn.reply.map { AnyHashable($0.ref) } ?? workEnd(turn.nonce) ?? AnyHashable(turn.id)
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -289,9 +323,19 @@ extension TranscriptView {
         return { ask(ref) }
     }
 
+    /// What the guest did answering the person's turn with this nonce, when this device ran it.
+    @ViewBuilder fileprivate func workRow(_ nonce: String) -> some View {
+        #if os(iOS)
+        if let steps = work[nonce], !steps.isEmpty {
+            WorkRow(steps: steps, live: liveWork == nonce).mascotObstacle().id(Self.workID(nonce))
+        }
+        #endif
+    }
+
     /// A turn on its way, and under it the guest's reply when it has one the log does not.
     @ViewBuilder fileprivate func queued(_ turn: QueuedTurn) -> some View {
         QueuedTurnRow(turn: turn, line: line).id(turn.id)
+        workRow(turn.nonce)
         if let reply = turn.reply { TurnRow(turn: reply, replay: replay, actions: actions).id(reply.ref) }
     }
 }

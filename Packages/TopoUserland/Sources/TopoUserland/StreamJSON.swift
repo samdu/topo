@@ -1,8 +1,8 @@
 import Foundation
 
 /// One event of Claude Code's `--output-format stream-json --verbose` output, as far as the app
-/// reads it: what a turn said, that it thought, which tools it called and the file a writing tool
-/// names, what each tool's result said and whether it was an error, the model and how much
+/// reads it: what a turn said, that it thought and what, which tools it called with what input
+/// and the file a writing tool names, what each tool's result said and whether it was an error, the model and how much
 /// context it holds, and how it ended. Everything else in a line is
 /// left unread.
 public enum StreamEvent: Sendable, Equatable {
@@ -47,6 +47,12 @@ public enum StreamEvent: Sendable, Equatable {
     case toolResult(isError: Bool, text: String, id: String? = nil)
     /// A thinking block of an assistant message: that the model thought, and nothing of what.
     case thinking
+    /// A tool call of the turn's own, for the transcript's work row (`ToolStep`): its `id`, the
+    /// line's one-line summary, and its input in full, capped. A sub-agent's call makes none.
+    case toolInput(id: String, name: String, summary: String, input: String)
+    /// A thinking block of the turn's own, for the work row, with its text when the block
+    /// carries any (nil for one written with none). A sub-agent's makes none.
+    case thought(String?)
     /// An assistant message's usage.
     case usage(Usage)
     /// `system`/`compact_boundary`: the conversation was compacted, by `/compact` or by Claude
@@ -270,9 +276,18 @@ public enum StreamJSON {
                     events.append(.toolUse(name: name, path: fileTools[name].flatMap { key in
                         (block["input"] as? [String: Any])?[key] as? String
                     }, id: block["id"] as? String))
+                    if replies, let id = block["id"] as? String {
+                        events.append(.toolInput(id: id, name: name,
+                                                 summary: ToolStep.summary(name: name, input: block["input"]),
+                                                 input: ToolStep.cap(ToolStep.render(input: block["input"]), ToolStep.inputMax).text))
+                    }
                 }
             case "thinking", "redacted_thinking":
                 events.append(.thinking)
+                if replies {
+                    let text = (block["thinking"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    events.append(.thought(text.map { ToolStep.cap($0, ToolStep.resultMax).text }))
+                }
             default:
                 break
             }
@@ -319,8 +334,8 @@ public enum StreamJSON {
         }
     }
 
-    /// The tools that write a file, and the key of their input that names it. The one thing read
-    /// from any tool's input.
+    /// The tools that write a file, and the key of their input that names it: the one thing of a
+    /// tool's input `toolUse` carries. The input in full is `toolInput`'s, the work row's alone.
     public static let fileTools: [String: String] = [
         "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
     ]

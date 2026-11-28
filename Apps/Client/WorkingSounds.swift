@@ -248,12 +248,12 @@ final class KeeperSounds {
     /// The tools of each class, as Daphne's voice channel classes them (buddy-channels
     /// `voice/classify.ts`): a sound per kind of work, `act` for everything else — a command,
     /// every MCP tool, anything new.
-    static let readTools: Set<String> = ["Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch",
+    nonisolated static let readTools: Set<String> = ["Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch",
                                          "NotebookRead", "ListAgents", "TaskOutput"]
-    static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
-    static let delegateTools: Set<String> = ["Agent", "Task", "Workflow"]
+    nonisolated static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+    nonisolated static let delegateTools: Set<String> = ["Agent", "Task", "Workflow"]
 
-    static func tone(forTool name: String) -> Tone {
+    nonisolated static func tone(forTool name: String) -> Tone {
         if readTools.contains(name) { return .read }
         if writeTools.contains(name) { return .write }
         if delegateTools.contains(name) { return .delegate }
